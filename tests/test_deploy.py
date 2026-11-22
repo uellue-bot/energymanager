@@ -136,6 +136,16 @@ class Deploy(unittest.TestCase):
         self.assertIn("origin/main", result.stderr)
         self.assertFalse((self.tmp / "docker-calls").exists())
 
+    def test_a_copy_outside_a_clone_refuses(self):
+        """A copy run from outside a clone fell back to the current folder (first run on the host)."""
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        shutil.copy(SCRIPT, outside / "deploy.sh")
+        result = subprocess.run(["bash", str(outside / "deploy.sh")], cwd=self.host,
+                                capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.tmp / "docker-calls").exists())
+
     def test_unknown_branch_fails_before_anything_runs(self):
         head = git(self.host, "rev-parse", "HEAD")
         self.assertNotEqual(self.run_deploy("--test", "no-such-branch", "try").returncode, 0)

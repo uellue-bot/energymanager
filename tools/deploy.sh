@@ -37,7 +37,10 @@ if [ "$#" -gt 0 ]; then
     git check-ref-format --branch "$ref" > /dev/null 2>&1 || fail "BRANCH is not a valid branch name: $ref" 2
 fi
 
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# Two steps: inside "cd $(...)" a failing git would not stop the script, and
+# `cd ""` stays in the current folder.
+top=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+cd "$top"
 
 # The data folder as Compose reads it from .env: CR and one pair of quotes removed.
 [ -f .env ] || fail ".env is missing; see the README."
