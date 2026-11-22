@@ -72,7 +72,7 @@ Integrations:
 - **forecast.solar:** location "home"; declination and modules power as in `.env`, with the power in W (7.92 kWp = 7920 W). Home Assistant counts the azimuth 0–360 from north, while the forecast.solar API and `.env` count from south. Enter `.env`'s azimuth + 180 (e.g. 55 → 235).
 - **Open-Meteo:** zone "Home". Its weather entity is `weather.home_2`; `weather.home` is met.no from the onboarding.
 - **Marketplace** (built in since 2026.11, formerly HACS): open it once and accept its warning. Custom integrations and cards are installed from there.
-- **RCT Power** (Marketplace, v0.14.2): the inverter's IP address and port 8899. Polls every 30 s by default.
+- **RCT Power** (Marketplace, v0.14.2): the inverter's IP address and port 8899. Polls every 30 s by default. Then hide `sensor.battery_at_rct_power_storage_battery_state_of_charge` (Settings › Entities › the sensor › settings › Visible: off). The integration gives the home battery's state of charge the device class `battery`, so the Maintenance dashboard flags it as a device battery running low whenever it is at 20 % or less. Hidden entities are left out there; the sensor keeps its history and statistics, and the project's dashboard names it explicitly, so it still shows there. Interim, until a proper fix (issue #7 in `uellue-bot/energymanager`).
 - **Daikin Onecta** (Marketplace, v5.0.4): an application on the Daikin developer portal with the redirect URI `https://my.home-assistant.io/redirect/oauth`; enter its client ID and secret when Home Assistant asks. Polls every 10 min from 07:00 to 22:00 and every 30 min otherwise, about 108 of the 200 calls per day.
 
 To test how a Daikin cloud outage shows up without touching the unit, see `compose.mock-daikin-outage.yaml`.
