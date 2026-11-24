@@ -368,9 +368,10 @@ class LogTest(unittest.TestCase):
         self.assertEqual(writes, [SOC])
 
 
-def diagnostics(delivered="2026-12-20T05:10:00.000Z", yesterday_heating=None, drop=None):
+def diagnostics(delivered="2026-12-20T05:10:00.000Z", yesterday_heating=None, today_heating=None, drop=None):
     """A diagnostics document shaped like daikin_onecta 5.0.4's, with placeholder values only."""
     heating = yesterday_heating or [1, 2, 2, 1, 2, 1, 2, 1, 1, 2, 2, 1]
+    today = today_heating or [1] + [None] * 11
     point = lambda kind, modes: {  # noqa: E731
         "embedded_id": "1", "management_point_type": kind,
         "consumption_data": {"value": {"electrical": dict(modes, unit="kWh")}}}
@@ -378,7 +379,7 @@ def diagnostics(delivered="2026-12-20T05:10:00.000Z", yesterday_heating=None, dr
         "id": "placeholder", "timestamp": delivered,
         "management_points": [
             {"embedded_id": "gateway", "management_point_type": "gateway"},
-            point("climateControl", {"heating": {"day": heating + [1] + [None] * 11, "week": [0] * 14, "month": [0] * 24},
+            point("climateControl", {"heating": {"day": heating + today, "week": [0] * 14, "month": [0] * 24},
                                      "cooling": {"day": [0] * 12 + [None] * 12, "week": [0] * 14, "month": [0] * 24}}),
             point("domesticHotWaterTank", {"heating": {"day": [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0] + [None] * 12,
                                                        "week": [0] * 14, "month": [0] * 24}}),
@@ -433,10 +434,51 @@ class EnergyTest(unittest.TestCase):
 
     def test_not_published_yet_waits(self):
         """A period of yesterday still missing, or data from before midnight: nothing stored, no failure."""
-        late = diagnostics(yesterday_heating=[1] * 11 + [None])
+        late = diagnostics(yesterday_heating=[1] * 11 + [None], today_heating=[None] * 12)
         self.assertFalse(co.energy_step(self.conn, lambda: late, MORNING, TZ))
         stale = diagnostics(delivered="2026-12-19T22:50:00.000Z")  # 23:50 local, the day before
         self.assertFalse(co.energy_step(self.conn, lambda: stale, MORNING, TZ))
+        self.assertEqual(self.periods(), [])
+        self.assertEqual(self.conn.execute("SELECT * FROM failure").fetchall(), [])
+
+    def test_period_without_value_skipped_once_a_later_one_has_one(self):
+        """The unit was off 06:00-08:00 local on 2026-11-23: Daikin never filled that period. The
+        others are stored, the gap is recorded, and the day is not read again."""
+        off = diagnostics(yesterday_heating=[1, 2, 2, None, 2, 2, 1, 3, 1, 3, 2, 2])
+        self.assertTrue(co.energy_step(self.conn, lambda: off, MORNING, TZ))
+        heating = [r for r in self.periods() if r[3] == "climateControl" and r[4] == "heating"]
+        self.assertEqual(len(heating), 11)
+        self.assertNotIn("2026-12-19T06:00", [r[1] for r in heating])
+        self.assertEqual(len(self.periods()), 35)
+        self.assertEqual([r[1:] for r in self.conn.execute("SELECT * FROM failure")],
+                         [("energy", "Daikin published no value for 2026-12-19: climateControl heating 06:00")])
+        self.assertTrue(co.energy_step(self.conn, lambda: off, MORNING, TZ))
+        self.assertEqual(len(self.conn.execute("SELECT * FROM failure").fetchall()), 1)
+
+    def test_last_period_without_value_final_once_today_has_one(self):
+        """22:00-24:00 without a value while today's first period has one: final as well."""
+        off = diagnostics(yesterday_heating=[1] * 11 + [None])
+        self.assertTrue(co.energy_step(self.conn, lambda: off, MORNING, TZ))
+        self.assertEqual(len(self.periods()), 35)
+
+    def test_final_gap_waits_for_the_other_series(self):
+        """A final gap in heating does not store the day while cooling's last period may still come."""
+        doc = diagnostics(yesterday_heating=[1, 2, 2, None, 2, 2, 1, 3, 1, 3, 2, 2])
+        doc["data"]["json_data"][0]["management_points"][1]["consumption_data"]["value"]["electrical"][
+            "cooling"]["day"] = [0] * 11 + [None] * 13
+        self.assertFalse(co.energy_step(self.conn, lambda: doc, MORNING, TZ))
+        self.assertEqual(self.periods(), [])
+        self.assertEqual(self.conn.execute("SELECT * FROM failure").fetchall(), [])
+
+    def test_whole_day_without_value_waits_quietly(self):
+        """Off all of yesterday, on since midnight: nothing to store, so no failure every 15 minutes."""
+        doc = diagnostics(yesterday_heating=[None] * 12)
+        for kind, mode in (("climateControl", "cooling"), ("domesticHotWaterTank", "heating")):
+            point = next(p for p in doc["data"]["json_data"][0]["management_points"]
+                         if p["management_point_type"] == kind)
+            point["consumption_data"]["value"]["electrical"][mode]["day"] = [None] * 12 + [0] + [None] * 11
+        for _ in range(3):
+            self.assertFalse(co.energy_step(self.conn, lambda: doc, MORNING, TZ))
         self.assertEqual(self.periods(), [])
         self.assertEqual(self.conn.execute("SELECT * FROM failure").fetchall(), [])
 

@@ -364,11 +364,13 @@ class FormatChanged(Exception):
 
 
 def yesterday_periods(diagnostics: dict, today: date, tz: ZoneInfo) -> list:
-    """(management_point, mode, [12 kWh values]) for the day before `today`, all or nothing.
+    """(management_point, mode, [12 kWh values or None]) for the day before `today`.
 
     Daikin's `day` arrays hold 12 two-hour periods of yesterday, then 12 of
     today, counted from the last time Daikin delivered data; that time must lie
-    in `today`, or the arrays refer to an older day.
+    in `today`, or the arrays refer to an older day. A period without a value
+    is final once a later period of the same array has one (the unit was off or
+    offline, 2026-11-23); otherwise it may still come, and nothing is returned.
     """
     try:
         devices = diagnostics["data"]["json_data"]
@@ -386,9 +388,10 @@ def yesterday_periods(diagnostics: dict, today: date, tz: ZoneInfo) -> list:
                     day = periods["day"]
                     if len(day) != 24:
                         raise FormatChanged(f"day has {len(day)} values, expected 24")
-                    if any(v is None for v in day[:12]):
+                    if any(v is None and all(w is None for w in day[i + 1:]) for i, v in enumerate(day[:12])):
                         raise NotReady(f"{point['management_point_type']} {mode}: not all periods published")
-                    result.append((point["management_point_type"], mode, [float(v) for v in day[:12]]))
+                    result.append((point["management_point_type"], mode,
+                                   [None if v is None else float(v) for v in day[:12]]))
     except (NotReady, FormatChanged):
         raise
     except Exception as e:  # any other shape than the one observed (design C7)
@@ -399,16 +402,25 @@ def yesterday_periods(diagnostics: dict, today: date, tz: ZoneInfo) -> list:
 
 
 def store_periods(conn: sqlite3.Connection, periods: list, day: date, tz: ZoneInfo, now: datetime) -> int:
-    rows = []
+    rows, missing = [], []
     for point, mode, values in periods:
         for i, kwh in enumerate(values):
             start = datetime.combine(day, dtime(2 * i), tzinfo=tz)
+            if kwh is None:
+                missing.append(f"{point} {mode} {start.strftime('%H:%M')}")
+                continue
             rows.append((day.isoformat(), start.strftime("%Y-%m-%dT%H:%M"), iso(start), point, mode, kwh, iso(now)))
-    with conn:
+    if not rows:  # nothing to store would leave the day unstored and read again every 15 minutes
+        raise NotReady(f"no period of {day.isoformat()} has a value")
+    with conn:  # the periods and the gap in one transaction: the day is not read again
         before = conn.total_changes
         conn.executemany("INSERT OR IGNORE INTO energy_period (day, period_start_local, period_start_utc, "
                          "management_point, mode, kwh, read_at) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
-        return conn.total_changes - before
+        stored = conn.total_changes - before
+        if missing:
+            conn.execute("INSERT INTO failure (at, part, error) VALUES (?, ?, ?)", (iso(now), "energy",
+                         f"Daikin published no value for {day.isoformat()}: {', '.join(missing)}"))
+        return stored
 
 
 def energy_step(conn: sqlite3.Connection, fetch: Callable[[], dict], now: datetime, tz: ZoneInfo) -> bool:
