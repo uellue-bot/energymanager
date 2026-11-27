@@ -507,6 +507,15 @@ class WriteGuardTest(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 co.log_query_frame(name, 1_800_000_000)
 
+    def test_unanswered_series_is_neither_walked_nor_queried(self):
+        """E11: logger.year_log_ts, which this inverter never answered, is left out, so its walk
+        does not stay pending and no query frame is built for it."""
+        conn = co.connect(":memory:")
+        self.assertNotIn("logger.year_log_ts", co.walk_pending(conn))
+        self.assertIn("logger.year_eload_log_ts", co.walk_pending(conn))
+        with self.assertRaises(PermissionError):
+            co.log_query_frame("logger.year_log_ts", 1_800_000_000)
+
     def test_logger_query_is_a_write_of_a_timestamp(self):
         frame = co.log_query_frame("logger.minutes_soc_log_ts", 1_800_000_000)
         received = ReceiveFrame()
