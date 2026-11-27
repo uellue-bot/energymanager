@@ -250,7 +250,7 @@ views:
                 x: $ex getFromConfig("entities.0.customdata").map(w => w.start)
                 y: $ex getFromConfig("entities.0.customdata").map(w => w.saving_eur)
                 # ± two out-of-sample errors of the week's period (inside or outside the
-                # house's heating period): roughly where
+                # house's heating season): roughly where
                 # the true saving lies around the value shown, about 95 % if the errors were
                 # normal and independent (they are correlated from week to week; see the
                 # model's lag-1 autocorrelation).
@@ -300,21 +300,21 @@ views:
               fitted on the baseline weeks against heating degree days, PV yield and their
               product, then
               priced. The saving is expected − actual. Each week's whiskers mark ± two
-              out-of-sample errors of its group: inside or outside the heating period.
+              out-of-sample errors of its group: inside or outside the heating season.
               Details: README, "Comparing control strategies".
               {% if m %}
               Model: {{ m.baseline_weeks }} baseline weeks, degree days below
               {{ m.base_temperature_c }} °C (fitted), lag-1 autocorrelation of the errors
               {{ m.lag1_autocorrelation if m.lag1_autocorrelation is not none else 'not available' }}.
               R² {{ m.r2_cost }}, which the easy weeks without heating make look better than
-              the heating period is; the error per week inside and outside the heating period
+              the heating season is; the error per week inside and outside the heating season
               (weeks in which the heat pump heated; where unknown, weeks colder than
               {{ m.base_temperature_c }} °C) is the honest figure:
 
               | Weeks | Number | Error in sample | Error out of sample (each quarter of a year left out of the fit in turn) |
               |---|---|---|---|
               {% for name, s in (m.periods or {}).items() -%}
-              | {{ 'Heating period' if name == 'heating' else 'Outside the heating period' }} | {{ s.weeks }} | {{ s.rms_eur ~ ' €' if s.rms_eur is not none else '–' }} | {{ s.rms_out_of_sample_eur ~ ' €' if s.rms_out_of_sample_eur is not none else '–' }} |
+              | {{ 'Heating season' if name == 'heating' else 'Outside the heating season' }} | {{ s.weeks }} | {{ s.rms_eur ~ ' €' if s.rms_eur is not none else '–' }} | {{ s.rms_out_of_sample_eur ~ ' €' if s.rms_out_of_sample_eur is not none else '–' }} |
               {% endfor %}
               {% endif %}
 
