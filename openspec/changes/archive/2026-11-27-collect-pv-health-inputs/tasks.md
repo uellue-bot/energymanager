@@ -21,7 +21,7 @@
 
 ## 5. Hallway test
 
-- [ ] 5.1 Hallway test (kaizen hallway-test) for E13 and E14: a fresh agent with only the README, the requirements and the examples finds the satellite irradiance of one hour and the last rescan time in the stores and reads them from Python. Deferred like 6.1 of `collect-device-details` unless the principal asks for it. Verify: a record in `design/hallway/`, findings fixed or filed.
+- [ ] 5.1 Hallway test (kaizen hallway-test) for E13 and E14: a fresh agent with only the README, the requirements and the examples finds the satellite irradiance of one hour and the last rescan time in the stores and reads them from Python. Deferred like 6.1 of `collect-device-details` unless the principal asks for it. Verify: a record in `design/hallway/`, findings fixed or filed. Not done: the change was archived on 2026-11-27 with this task open; the principal: "For now we are doing research, cooking the whole thing into sth like a product is another topic".
 
 ## Check on the automation PC (2026-11-27, read-only)
 
