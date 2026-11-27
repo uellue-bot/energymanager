@@ -177,6 +177,7 @@ The server certificate is valid for 397 days. Renew it before then by running th
 Records what the inverter and the heat pump hold beyond Home Assistant's entities, in an SQLite database outside the repository (`<EM_DATA_DIR>/collector/collector.sqlite`; why: `design/research/rct-onecta-data.md`):
 
 - every minute, the inverter's battery and inverter state objects, raw (`power_mng.state`, `battery.bat_status`, `battery.status`, `battery.status2`, `prim_sm.state`), to find out how a battery calibration shows (E10);
+- every minute as well, the maximum power point (MPP) tracker of PV input A, raw: the time of the last global MPP rescan (`dc_conv.last_rescan`), the voltage correction of that rescan (`dc_conv.dc_conv_struct[0].rescan_correction`) and the MPP voltage target (`dc_conv.dc_conv_struct[0].u_target`), so that a rescan can be told from shading (E14). A NaN answer cannot be stored and is left out as a gap, not recorded as a failure; these three objects do not count for the "state not read" alert;
 - the inverter's own logs (5-minute, daily, monthly and yearly series), first back to their oldest entry, then the newest entries every hour (E11);
 - once a day after 03:00, yesterday's twelve 2-hour periods of the heat pump's electrical energy, for space heating and hot water, taken from the Daikin Onecta integration's diagnostics in Home Assistant, with no call to the Daikin cloud (E12).
 
