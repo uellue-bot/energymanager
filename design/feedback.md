@@ -27,3 +27,8 @@ What people said about working with the agents and the plugin, positive and nega
 - 2026-11-23 | neutral | walkthrough | Starting in the wrong project phase was OK: the plan has to be synced with the agent, which cannot read minds; the assumption was reasonable but missed the big picture. Awareness of the greater plan against the current sprint (phases and tasks) is wanted, though it may not distil into instructions | effect: ledger 2026-11-23 row 2, uellue-bot/skills#6
 - 2026-11-23 | negative | process | Fixed flows and gates are needed, not just instructions | effect: ledger 2026-11-23 row 1, uellue-bot/skills#5
 - 2026-11-23 | positive | debrief | Recapping a session, and above all checking it for what was left behind, is very valuable (second time said) | effect: none needed; confirms the cadence
+- 2026-11-27 | positive | research | Modelling the baseline as the basis for later comparisons worked well; a loose request to correct for solar yield became a solid extension of established methods, adapted to the project | effect: none needed
+- 2026-11-27 | positive | tooling | Remote Control worked very smoothly for sharing screenshots and looking at files such as a pull request draft | effect: ledger 2026-11-27 row 7
+- 2026-11-27 | negative | safety | Remote Control is wanted, but its security implications need mitigating; the controlled session needs wide privileges for reasons that are not clear | effect: ledger 2026-11-27 row 7
+- 2026-11-27 | positive | docs | The plain-English README worked, tested like a field test with adjustments where the reader got confused; the split between README and separate docs may need tuning later | effect: note in the ledger
+- 2026-11-27 | positive | messages | Message length fine | effect: Message size line
