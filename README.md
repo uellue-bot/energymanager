@@ -192,6 +192,20 @@ The inverter answers one client at a time and cuts answers when another client a
 
 Failures are kept in table `failure` (part `state`, `log` or `energy`). The Daikin integration's diagnostics are not a stable interface; when an update changes them, nothing is stored for that day and the alert says so.
 
+### Backup
+
+Much of the collected data cannot be fetched again: the forecasts as they were issued, the heat pump's 2-hour periods once the cloud no longer has them, the inverter's 5-minute values once its own log has overwritten them. Back it up on demand from another machine, for example a laptop whose OneDrive folder is synced:
+
+```sh
+tools/backup_from_host.sh <user>@<host> "/mnt/c/Users/<you>/OneDrive/energymanager-backup"
+```
+
+Each run creates a folder named by the UTC time with one archive and its checksum. The script takes consistent snapshots of the collector's store, the forecast archive and Home Assistant's history while the stack runs (SQLite's own backup, not a file copy), adds the small data files in the data folder (`*.csv`, `*.tsv`, `deploy.log`, `unit/`, `weather-history/`), and checks the copy: checksum, unpacking, SQLite's integrity check of every store. It changes nothing in the data folder and deletes no earlier backups. It needs ssh access to the host and reads the data folder from `.env` in the host's clone (`~/energymanager`, or `EM_BACKUP_CLONE`).
+
+Left out on purpose, because they hold credentials and can be recreated: the certificate authority (`tls/`; run `tools/local_tls.sh` again and install the new authority on the devices), Home Assistant's configuration (`.storage/`, `secrets.yaml`: set up the integrations and the phone app again as described above; the history then continues under the same entity names) and `.env` (from `.env.example`, with a new Home Assistant token for the collector).
+
+To restore: unpack the archive and copy its contents into a new data folder with the stack stopped.
+
 ### Tests
 
 ```sh
