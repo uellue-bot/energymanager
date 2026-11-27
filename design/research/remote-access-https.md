@@ -9,6 +9,13 @@ Provenance: the session on 2026-11-22. Tailscale facts from tailscale.com/kb/115
 - Remote access through a VPN, not by opening a port to Home Assistant.
 - HTTPS for now from our own certificate authority (option D). Tailscale (option A) is noted as the simpler path if the own authority proves cumbersome, above all on the phone.
 
+## Remote access as set up (2026-11-24)
+
+- WireGuard on the FRITZ!Box, one connection per device (phones, Windows, Debian), with a MyFRITZ! address. The FRITZ!Box supports WireGuard only with a MyFRITZ! or dynamic DNS address (AVM knowledge base 3711).
+- Not IPsec: AVM recommends WireGuard when the box has no public IPv4 address, and Windows cannot connect to the FRITZ!Box over IPsec with its built-in tools (AVM, "VPN with FRITZ!Box").
+- Tested by the principal: works on all devices; from outside the home network, on the phone over mobile data. Issue: uellue-bot/energymanager#1.
+- On Debian: `nmcli connection import type wireguard file <file>.conf` with NetworkManager, or `wg-quick` with `openresolv` without it (`wg-quick` sets the `DNS =` line through `resolvconf`).
+
 ## Options
 
 | | Option | Effort | HTTPS without warning | Remote | Depends on |
