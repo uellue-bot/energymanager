@@ -2,7 +2,7 @@
 
 Collects data from a home with a heat pump, solar power and a battery, and will plan the heat pump's operation to use more of the home's own solar power. The pilot is a Daikin Altherma with an RCT inverter and battery, connected through Home Assistant.
 
-Status: early prototype. It is developed as a living lab: built, run and corrected in one real household, with real devices and real data, by a person working with coding agents. Expect gaps and changes. The design documents are in `design/`; the specifications are in `openspec/`.
+Status: early prototype. It is developed as a living lab: built, run and corrected in one real household, with real devices and real data, by a person working with coding agents. Expect gaps and changes. The design documents are in `design/`; the specifications are in `openspec/`. The explanations here are written for readers who know some physics and maths but are not specialists in building energy.
 
 License: MIT, see `LICENSE`.
 
