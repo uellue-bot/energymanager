@@ -19,3 +19,11 @@ What people said about working with the agents and the plugin, positive and nega
 - 2026-11-22 | neutral | safety | How far to trust agents compared with packages from PyPI, which are more verifiable but also rarely verified | effect: note for the next debrief
 - 2026-11-22 | positive | messages | Message length OK | effect: Message size line
 - 2026-11-22 | positive | debrief | The debrief caught what slipped through the cracks; it should be done regularly | effect: none yet (cadence to agree)
+- 2026-11-23 | positive | research | Reading the values from photos of the unit's display was phenomenal | effect: none needed; the tool for it is a ledger 2026-11-23 row 6 item
+- 2026-11-23 | positive | collaboration | Happy with the progress in general | effect: none needed
+- 2026-11-23 | positive | research | The detailed, well-researched shopping list was very helpful | effect: none needed
+- 2026-11-23 | positive | github-workflow | The clipboard and the compare link work well for pull requests; so far the best alternative to giving the bot a token that opens them | effect: uellue-bot/skills#5 comment
+- 2026-11-23 | negative | github-workflow | The commit workflow needs improvement; reusable workflows for this way of working are needed, in other projects too, possibly as a separate project | effect: ledger 2026-11-23 row 1, uellue-bot/skills#5
+- 2026-11-23 | neutral | walkthrough | Starting in the wrong project phase was OK: the plan has to be synced with the agent, which cannot read minds; the assumption was reasonable but missed the big picture. Awareness of the greater plan against the current sprint (phases and tasks) is wanted, though it may not distil into instructions | effect: ledger 2026-11-23 row 2, uellue-bot/skills#6
+- 2026-11-23 | negative | process | Fixed flows and gates are needed, not just instructions | effect: ledger 2026-11-23 row 1, uellue-bot/skills#5
+- 2026-11-23 | positive | debrief | Recapping a session, and above all checking it for what was left behind, is very valuable (second time said) | effect: none needed; confirms the cadence
