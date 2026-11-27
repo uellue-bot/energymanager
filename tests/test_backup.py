@@ -36,6 +36,7 @@ class Backup(unittest.TestCase):
         (self.home / "energymanager").mkdir(parents=True)
         self.data = self.tmp / "data"
         (self.home / "energymanager" / ".env").write_text(f'EM_DATA_DIR="{self.data}"\r\n')
+        self.open_stores = {}
         for rel, table in (("collector/collector.sqlite", "state"), ("forecasts/forecasts.sqlite", "fetch"),
                            ("homeassistant/home-assistant_v2.db", "states")):
             path = self.data / rel
@@ -45,7 +46,8 @@ class Backup(unittest.TestCase):
             conn.execute(f"CREATE TABLE {table} (x)")
             conn.executemany(f"INSERT INTO {table} VALUES (?)", [(i,) for i in range(100)])
             conn.commit()
-            self.addCleanup(conn.close)  # kept open: the store is in use while it is backed up
+            self.open_stores[rel] = conn  # kept open: the store is in use while it is backed up
+            self.addCleanup(conn.close)
         (self.data / "unit-panel-figures.csv").write_text("resolution,period_start\n")
         (self.data / "deploy.log").write_text("line\n")
         (self.data / "unit").mkdir()
@@ -59,11 +61,14 @@ class Backup(unittest.TestCase):
         (self.data / "homeassistant" / ".storage").mkdir()
         (self.data / "homeassistant" / ".storage" / "auth").write_text("{}")
         self.before = tree_digest(self.data)
-        # ssh runs the command here with the host's home; scp copies the path after "host:".
+        # ssh runs the command here with the host's home, through a shell as a real host does
+        # (so arguments are parsed once more), with $REMOTE_PATH first in the host's PATH;
+        # scp copies the path after "host:".
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir()
         ssh = bin_dir / "ssh"
-        ssh.write_text(f'#!/bin/sh\nshift\nexport HOME="{self.home}"\nexec "$@"\n')
+        ssh.write_text(f'#!/bin/sh\nshift\nexport HOME="{self.home}"\n'
+                       'if [ -n "$REMOTE_PATH" ]; then PATH="$REMOTE_PATH:$PATH"; fi\nexec sh -c "$*"\n')
         scp = bin_dir / "scp"
         scp.write_text('#!/usr/bin/env python3\nimport shutil, sys\n'
                        'args = [a for a in sys.argv[1:] if a != "-q"]\n'
@@ -108,6 +113,56 @@ class Backup(unittest.TestCase):
         self.assertEqual(self.run_backup("user@host", str(self.dest)).returncode, 0)
         self.assertEqual(len(list(self.dest.iterdir())), 2)
         self.assertTrue((self.dest / "2000-01-01T0000Z" / "marker").exists())
+
+    def test_a_store_not_in_use_is_read_without_creating_files(self):
+        """Without -wal and -shm (stack stopped), reading must not create them: the service's
+        user might then be unable to write its own store."""
+        store = self.data / "forecasts" / "forecasts.sqlite"
+        self.open_stores["forecasts/forecasts.sqlite"].close()  # the last user closes: as on a clean stop
+        self.assertFalse(Path(str(store) + "-wal").exists())
+        result = self.run_backup("user@host", str(self.dest))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(Path(str(store) + "-shm").exists())
+        self.assertFalse(Path(str(store) + "-wal").exists())
+
+    def test_a_failed_check_leaves_only_a_partial_folder(self):
+        """scp delivers a damaged archive: the checksum fails, the run fails, and what is left is
+        marked .partial, never a folder that looks complete."""
+        scp = self.tmp / "bin" / "scp"
+        scp.write_text(scp.read_text() + 'import glob\nfor f in glob.glob(args[-1] + "/*.tar.gz"):\n'
+                       '    open(f, "ab").write(b"damage")\n')
+        result = self.run_backup("user@host", str(self.dest))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([p.suffix for p in self.dest.iterdir()], [".partial"])
+        self.assertEqual(list(self.home.glob("em-backup.*")), [])
+
+    def test_a_failure_on_the_host_leaves_nothing_there(self):
+        remote_bin = self.tmp / "remote-bin"
+        remote_bin.mkdir()
+        tar = remote_bin / "tar"
+        tar.write_text("#!/bin/sh\nexit 1\n")
+        tar.chmod(tar.stat().st_mode | stat.S_IEXEC)
+        result = subprocess.run(["bash", str(SCRIPT), "user@host", str(self.dest)], capture_output=True,
+                                text=True, env={**self.env, "REMOTE_PATH": str(remote_bin)})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(self.home.glob("em-backup.*")), [])
+        self.assertFalse(self.dest.exists())
+
+    def test_a_missing_store_fails(self):
+        (self.data / "forecasts" / "forecasts.sqlite").rename(self.tmp / "elsewhere.sqlite")
+        result = self.run_backup("user@host", str(self.dest))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("store not found", result.stderr)
+        self.assertFalse(self.dest.exists())
+
+    def test_spaces_and_colons_in_paths(self):
+        """A clone path with a space reaches the host intact; a relative DEST with a colon stays local."""
+        (self.home / "energymanager").rename(self.home / "my clone")
+        dest = "backups: one"
+        result = subprocess.run(["bash", str(SCRIPT), "user@host", dest], capture_output=True, text=True,
+                                cwd=self.tmp, env={**self.env, "EM_BACKUP_CLONE": "my clone"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(list((self.tmp / dest).iterdir())), 1)
 
     def test_missing_env_fails_and_writes_nothing(self):
         (self.home / "energymanager" / ".env").unlink()
