@@ -42,7 +42,7 @@ To check files directly: `python3 -I tools/check_private_data.py --files <file>.
 
 ### Forecast archive
 
-Keeps every solar forecast (forecast.solar) and weather forecast (Open-Meteo) as it was issued, once per hour, in an SQLite database outside the repository. Needs Docker Engine with Compose.
+Keeps every solar forecast (forecast.solar) and weather forecast (Open-Meteo) as it was issued, once per hour, in an SQLite database outside the repository. Also once per hour, it keeps Open-Meteo's satellite-derived irradiance of the previous UTC day (service `open-meteo-satellite`): global horizontal, direct normal and diffuse irradiance, and the irradiance on the roof plane, each the mean of the hour before its time stamp. Needs Docker Engine with Compose.
 
 1. Copy `.env.example` to `.env` and fill it in: the data folder and the roof plane. `.env` holds the site's location and is ignored by git.
 2. Create the data folder: `mkdir -p "<EM_DATA_DIR>/forecasts"`
@@ -50,6 +50,18 @@ Keeps every solar forecast (forecast.solar) and weather forecast (Open-Meteo) as
 4. Check: `docker compose logs archive` shows one line per service and hour, e.g. `forecast.solar: ok`. A restart within the same hour logs `skipped` and makes no call.
 
 The database is `<EM_DATA_DIR>/forecasts/forecasts.sqlite`, table `fetch`: one row per attempt, with the service, the fetch time and the issue time (UTC), the HTTP status, the response body unchanged, and the error if the fetch failed. Rows are never changed or deleted. The response bodies contain the caller's public IP address and place name, so they belong in no repository.
+
+To read the satellite irradiance of one hour from Python (values in W/m², `None` where the service had none; the latest response covering the hour is used):
+
+```python
+import sys; sys.path.insert(0, "archive")
+from datetime import datetime, timezone
+import forecast_archive as fa
+conn = fa.connect("<EM_DATA_DIR>/forecasts/forecasts.sqlite")
+fa.satellite_hour(conn, datetime(2026, 11, 22, 11, tzinfo=timezone.utc))  # the hour 11:00 to 12:00 UTC
+```
+
+Open-Meteo's data are under CC BY 4.0: wherever they are shown, credit Open-Meteo with a link (https://open-meteo.com/en/licence). The free API is for non-commercial use only.
 
 The endpoint `http://127.0.0.1:8765/e5?days=7` returns, per hour of the last days, the latest solar forecast and the weather-based production estimate fetched before that hour began. The estimate is the irradiance on the roof plane × kWp, with no losses, so it is an upper estimate. The endpoint is reachable from this machine only.
 
