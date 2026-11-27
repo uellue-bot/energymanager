@@ -10,3 +10,18 @@ rest:
         value_template: "{{ value_json.hours | length }}"
         json_attributes:
           - hours
+
+  # A first try (examples E20 to E22): weekly net electricity cost, the
+  # baseline's expected cost under each week's weather and the weekly solar
+  # spill, in the attribute `weeks`; the fitted baseline model in `model`. Not
+  # recorded either (see recorder.yaml).
+  - resource: http://127.0.0.1:8765/control-strategies
+    scan_interval: 3600
+    sensor:
+      - name: Forecast archive control strategies
+        unique_id: energymanager_forecast_archive_control_strategies
+        value_template: "{{ value_json.weeks | length }}"
+        json_attributes:
+          - weeks
+          - prices
+          - model

@@ -144,3 +144,180 @@ views:
             data_generator: |
               return entity.attributes.hours.map(
                 h => [new Date(h.start).getTime(), h.weather_estimate_wh]);
+
+  # A first try at comparing control strategies (examples E20 to E22), to be
+  # tested on the data. Net cost = grid import x grid price - feed-in x feed-in
+  # tariff; prices in the archive's settings (.env.example). One card over the
+  # full width (panel), the plots stacked in it.
+  - title: Control strategies
+    path: control-strategies
+    panel: true
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: custom:plotly-graph
+            title: Net electricity cost per week over outdoor temperature
+            raw_plotly_config: true
+            layout:
+              height: 480
+              margin: {l: 60, r: 20, t: 10, b: 50}
+              legend: {orientation: h, x: 0, y: 1.08}
+              showlegend: true
+              xaxis:
+                type: linear
+                title:
+                  text: Mean outdoor temperature of the week (°C)
+              yaxis:
+                title:
+                  text: Net cost per week (€)
+            entities:
+              - entity: ""
+                name: Baseline (actual)
+                type: scatter
+                mode: markers
+                customdata: >-
+                  $ex (hass.states["sensor.forecast_archive_control_strategies"]?.attributes.weeks ?? [])
+                  .filter(w => w.strategy === "baseline" && w.result === "actual")
+                x: $ex getFromConfig("entities.0.customdata").map(w => w.temperature_c)
+                y: $ex getFromConfig("entities.0.customdata").map(w => w.cost_eur)
+                hovertemplate: |-
+                  <b>%{customdata.week}</b> (from %{customdata.start})<br>
+                  Cost: %{y:.2f} €, mean temperature %{x:.1f} °C<br>
+                  Solar spill: %{customdata.spill_eur:.2f} € (%{customdata.spill_kwh} kWh)<br>
+                  Load %{customdata.load_kwh} kWh, import %{customdata.import_kwh} kWh, feed-in %{customdata.feed_kwh} kWh
+                  <extra></extra>
+
+          # E22: each week against what the baseline would have cost under that week's
+          # weather (the adjusted baseline, design/research/weather-normalisation.md).
+          - type: custom:plotly-graph
+            title: Net cost per week against the baseline's expected cost
+            raw_plotly_config: true
+            layout:
+              height: 480
+              margin: {l: 60, r: 20, t: 10, b: 50}
+              legend: {orientation: h, x: 0, y: 1.08}
+              showlegend: true
+              xaxis:
+                title:
+                  text: Expected cost of the baseline under the week's weather (€)
+              yaxis:
+                title:
+                  text: Actual cost per week (€)
+            entities:
+              - entity: ""
+                name: Baseline (actual)
+                type: scatter
+                mode: markers
+                customdata: >-
+                  $ex (hass.states["sensor.forecast_archive_control_strategies"]?.attributes.weeks ?? [])
+                  .filter(w => w.strategy === "baseline" && w.result === "actual")
+                x: $ex getFromConfig("entities.0.customdata").map(w => w.expected_cost_eur)
+                y: $ex getFromConfig("entities.0.customdata").map(w => w.cost_eur)
+                hovertemplate: |-
+                  <b>%{customdata.week}</b> (from %{customdata.start})<br>
+                  Actual %{y:.2f} €, expected %{x:.2f} €, saving %{customdata.saving_eur:.2f} €<br>
+                  Degree days %{customdata.hdd}, PV %{customdata.pv_kwh} kWh, %{customdata.temperature_c:.1f} °C
+                  <extra></extra>
+              - entity: ""
+                name: Same cost as expected
+                mode: lines
+                line: {dash: dot, color: grey}
+                hoverinfo: skip
+                # From the smallest to the largest cost shown, actual or expected.
+                x: >-
+                  $ex (c => c.length ? [Math.min(...c), Math.max(...c)] : [])(getFromConfig("entities.0.customdata")
+                  .flatMap(w => [w.cost_eur, w.expected_cost_eur]))
+                y: $ex getFromConfig("entities.1.x")
+
+          - type: custom:plotly-graph
+            title: Saving per week against the baseline (€)
+            raw_plotly_config: true
+            layout:
+              height: 320
+              margin: {l: 60, r: 20, t: 10, b: 40}
+              xaxis:
+                type: date
+              yaxis:
+                title:
+                  text: Saving per week (€)
+            entities:
+              - entity: ""
+                name: Baseline (actual)
+                type: bar
+                customdata: >-
+                  $ex (hass.states["sensor.forecast_archive_control_strategies"]?.attributes.weeks ?? [])
+                  .filter(w => w.strategy === "baseline" && w.result === "actual")
+                x: $ex getFromConfig("entities.0.customdata").map(w => w.start)
+                y: $ex getFromConfig("entities.0.customdata").map(w => w.saving_eur)
+                # ± two out-of-sample errors of the week's period (inside or outside the
+                # house's heating period): roughly where
+                # the true saving lies around the value shown, about 95 % if the errors were
+                # normal and independent (they are correlated from week to week; see the
+                # model's lag-1 autocorrelation).
+                error_y:
+                  type: data
+                  array: $ex getFromConfig("entities.0.customdata").map(w => w.band_eur ?? 0)
+                  thickness: 1
+                hovertemplate: |-
+                  <b>%{customdata.week}</b>: saving %{y:.2f} € ± %{customdata.band_eur} €<br>
+                  Actual %{customdata.cost_eur:.2f} €, expected %{customdata.expected_cost_eur:.2f} €
+                  <extra></extra>
+
+          # E21: consumption a better shift into sunny hours could in principle have
+          # saved: per day the smaller of grid import and feed-in, at the price difference.
+          - type: custom:plotly-graph
+            title: Solar spill per week (€)
+            raw_plotly_config: true
+            layout:
+              height: 320
+              margin: {l: 60, r: 20, t: 10, b: 40}
+              xaxis:
+                type: date
+              yaxis:
+                title:
+                  text: Spill per week (€)
+            entities:
+              - entity: ""
+                name: Baseline (actual)
+                type: bar
+                customdata: >-
+                  $ex (hass.states["sensor.forecast_archive_control_strategies"]?.attributes.weeks ?? [])
+                  .filter(w => w.strategy === "baseline" && w.result === "actual")
+                x: $ex getFromConfig("entities.0.customdata").map(w => w.start)
+                y: $ex getFromConfig("entities.0.customdata").map(w => w.spill_eur)
+                hovertemplate: |-
+                  <b>%{customdata.week}</b>: %{y:.2f} € (%{customdata.spill_kwh} kWh)<extra></extra>
+
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.forecast_archive_control_strategies' %}
+              {% set m = state_attr(s, 'model') %}
+              {% set p = state_attr(s, 'prices') %}
+              **How to read this (a first try).** Net cost = grid import ×
+              {{ p.grid_eur_per_kwh if p else '?' }} €/kWh − feed-in ×
+              {{ p.feed_in_eur_per_kwh if p else '?' }} €/kWh. The expected cost is what the
+              baseline would have cost under the week's weather: grid import and feed-in are
+              fitted on the baseline weeks against heating degree days, PV yield and their
+              product, then
+              priced. The saving is expected − actual. Each week's whiskers mark ± two
+              out-of-sample errors of its group: inside or outside the heating period.
+              Details: README, "Comparing control strategies".
+              {% if m %}
+              Model: {{ m.baseline_weeks }} baseline weeks, degree days below
+              {{ m.base_temperature_c }} °C (fitted), lag-1 autocorrelation of the errors
+              {{ m.lag1_autocorrelation if m.lag1_autocorrelation is not none else 'not available' }}.
+              R² {{ m.r2_cost }}, which the easy weeks without heating make look better than
+              the heating period is; the error per week inside and outside the heating period
+              (weeks in which the heat pump heated; where unknown, weeks colder than
+              {{ m.base_temperature_c }} °C) is the honest figure:
+
+              | Weeks | Number | Error in sample | Error out of sample (each quarter of a year left out of the fit in turn) |
+              |---|---|---|---|
+              {% for name, s in (m.periods or {}).items() -%}
+              | {{ 'Heating period' if name == 'heating' else 'Outside the heating period' }} | {{ s.weeks }} | {{ s.rms_eur ~ ' €' if s.rms_eur is not none else '–' }} | {{ s.rms_out_of_sample_eur ~ ' €' if s.rms_out_of_sample_eur is not none else '–' }} |
+              {% endfor %}
+              {% endif %}
+
+              Temperature: [Weather data by Open-Meteo.com](https://open-meteo.com/)
+              ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), daily means of the
+              hourly values. Energy: the inverter's daily logs.
