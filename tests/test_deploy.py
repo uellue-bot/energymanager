@@ -67,7 +67,9 @@ class Deploy(unittest.TestCase):
         result = self.run_deploy()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(git(self.host, "rev-parse", "HEAD"), git(self.upstream, "rev-parse", "HEAD"))
-        self.assertEqual((self.tmp / "docker-calls").read_text(), "compose up -d --build\n")
+        # Home Assistant is restarted after the start, so it reads the deployed packages.
+        self.assertEqual((self.tmp / "docker-calls").read_text(),
+                         "compose up -d --build\ncompose restart homeassistant\n")
         fields = self.log()[0].split("\t")
         self.assertEqual(fields[2:], ["main", git(self.host, "rev-parse", "--short", "HEAD"), "main", "-"])
 

@@ -11,7 +11,9 @@
 # clone has local changes or commits, and both append one line to
 # "$EM_DATA_DIR/deploy.log" before starting the stack: time (UTC), user, mode,
 # commit, branch, reason. A line in the log means the code was checked out, not
-# that the stack started. Return to main by running the script without arguments.
+# that the stack started. Both restart Home Assistant, so that it reads the
+# deployed packages and dashboards. Return to main by running the script without
+# arguments.
 set -euo pipefail
 
 FORK=${EM_DEPLOY_FORK:-https://github.com/uellue-bot/energymanager.git}
@@ -76,4 +78,9 @@ commit=$(git rev-parse --short HEAD)
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(id -un)" \
     "$mode" "$commit" "$ref" "$reason" >> "$data_dir/deploy.log"
 docker compose up -d --build
+# Compose recreates only containers whose image or settings changed. Home
+# Assistant reads its packages and dashboards from the clone at start, so it is
+# restarted on every deploy; its sensor history then shows a gap of about a
+# minute, shortly after the time this deploy is logged.
+docker compose restart homeassistant
 echo "Deployed $mode $commit ($ref); logged in $data_dir/deploy.log"
