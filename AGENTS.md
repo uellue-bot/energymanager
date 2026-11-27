@@ -8,7 +8,7 @@ Specifications use OpenSpec (`openspec/`); its rules for this project are in `op
 
 ## Deploying to the host
 
-The host runs the stack with `tools/deploy.sh`, never with a bare `git checkout`, `reset` or `docker compose up`. Without arguments it deploys the principal's main branch; `--test BRANCH REASON` runs a branch of the fork and needs the principal's OK in chat first. Code that writes to a device (the inverter, the heat pump) gets its independent review before it runs anywhere, on any branch.
+The host runs the stack with `tools/deploy.sh`, never with a bare `git checkout`, `reset` or `docker compose up`. Without arguments it deploys the principal's main branch; `--test BRANCH REASON` runs a branch of the fork and needs the principal's OK in chat first; one OK covers that branch or workstream until it is merged, unless the principal says otherwise. Code that writes to a device (the inverter, the heat pump) gets its independent review before it runs anywhere, on any branch.
 
 ## Issue tracker
 
