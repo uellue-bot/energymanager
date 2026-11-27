@@ -7,12 +7,14 @@
 #     DEST  local folder; each run creates DEST/<UTC time>/ with one archive and its checksum
 #
 # On the host, it reads the data folder from .env in the host's clone ($EM_BACKUP_CLONE,
-# default ~/energymanager), takes consistent snapshots of the SQLite stores while the stack
-# runs (SQLite's backup, not a file copy), copies the small data files, and packs them into
-# one archive in a temporary folder in the host user's home, which it removes afterwards.
-# Locally, it checks the archive's checksum, unpacks it into a temporary folder and runs
-# SQLite's integrity check on every store. It changes nothing in the data folder and
-# deletes no earlier backups.
+# default ~/energymanager, relative to the host user's home), takes consistent snapshots of
+# the SQLite stores while the stack runs (SQLite's backup, not a file copy), copies the
+# small data files, and packs them into one archive in a temporary folder in the host
+# user's home, which it removes afterwards, also on failure. It first checks that the home
+# has room for twice the stores' size. Locally, the archive goes to DEST/<UTC time>.partial/
+# and is renamed to DEST/<UTC time>/ only after its checksum matches and SQLite's integrity
+# check passes for every store; a run that fails leaves a .partial folder or nothing. It
+# changes nothing in the data folder and deletes no earlier backups.
 #
 # Left out on purpose, since they hold credentials and can be recreated (README, "Backup"):
 # the certificate authority (tls/), Home Assistant's configuration (.storage/,
@@ -23,10 +25,12 @@ usage="usage: $0 HOST DEST"
 [ "$#" -eq 2 ] && [ -n "$1" ] && [ -n "$2" ] || { echo "$usage" >&2; exit 2; }
 host=$1 dest=$2
 case $host in -*) echo "HOST must be an ssh destination, not an option: $host" >&2; exit 2 ;; esac
+# An absolute path, so that scp never reads "name:..." in DEST as a remote host.
+case $dest in /*) ;; *) dest="$PWD/$dest" ;; esac
 clone=${EM_BACKUP_CLONE:-energymanager}
 
-# On the host: snapshot, pack, print the temporary folder and the archive's name.
-remote=$(ssh "$host" bash -s -- "$clone" <<'REMOTE'
+# Arguments reach the host's shell once more; %q quotes them for it.
+remote=$(ssh "$host" "bash -s -- $(printf '%q' "$clone")" <<'REMOTE'
 set -euo pipefail
 cd "$HOME"
 cd "$1"
@@ -35,69 +39,98 @@ data=$(sed -n 's/^EM_DATA_DIR=//p' .env | tail -n 1 | tr -d '\r')
 data=${data#[\"\']}
 data=${data%[\"\']}
 [ -n "$data" ] && [ -d "$data" ] || { echo "EM_DATA_DIR is not set in .env or does not exist" >&2; exit 1; }
-stamp=$(date -u +%Y-%m-%dT%H%MZ)
+stores="collector/collector.sqlite forecasts/forecasts.sqlite homeassistant/home-assistant_v2.db"
+size=0
+for s in $stores; do
+    if [ ! -f "$data/$s" ]; then echo "store not found: $data/$s" >&2; exit 1; fi
+    size=$((size + $(stat -c %s "$data/$s")))
+    if [ -f "$data/$s-wal" ]; then size=$((size + $(stat -c %s "$data/$s-wal"))); fi
+done
+free=$(df -P -B1 "$HOME" | awk 'NR == 2 {print $4}')
+[ "$free" -gt $((2 * size + 100000000)) ] || {
+    echo "not enough room in $HOME: $free bytes free, $((2 * size + 100000000)) needed" >&2; exit 1; }
+stamp=$(date -u +%Y-%m-%dT%H%M%SZ)
 tmp=$(mktemp -d "$HOME/em-backup.XXXXXX")
+done_ok=0
+trap '[ "$done_ok" = 1 ] || rm -rf -- "${tmp:?}"' EXIT
 name="energymanager-backup-$stamp"
 out="$tmp/$name"
 mkdir -p "$out"
-python3 - "$data" "$out" <<'PY'
+python3 - "$data" "$out" $stores <<'PY'
 import os, sqlite3, sys
-data, out = sys.argv[1], sys.argv[2]
-for rel in ("collector/collector.sqlite", "forecasts/forecasts.sqlite", "homeassistant/home-assistant_v2.db"):
+data, out, stores = sys.argv[1], sys.argv[2], sys.argv[3:]
+for rel in stores:
     path = os.path.join(data, rel)
-    if not os.path.exists(path):
-        print(f"not found, skipped: {rel}", file=sys.stderr)
-        continue
+    wal, shm = os.path.exists(path + "-wal"), os.path.exists(path + "-shm")
+    if wal and shm:  # in use: a read-only reader, consistent while the service writes
+        uri = f"file:{path}?mode=ro"
+    elif not wal:  # not in use: nothing to read from a log, and nothing may be created here
+        uri = f"file:{path}?mode=ro&immutable=1"
+    else:  # opening it would create a -shm owned by this user, which the service may not write
+        sys.exit(f"{rel}: a -wal without -shm; back it up while the stack runs or after a clean stop")
     os.makedirs(os.path.join(out, os.path.dirname(rel)), exist_ok=True)
-    source = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    source = sqlite3.connect(uri, uri=True, timeout=30)
     target = sqlite3.connect(os.path.join(out, rel))
     source.backup(target)
     target.close()
     source.close()
 PY
 for f in "$data"/*.csv "$data"/*.tsv "$data"/deploy.log; do
-    [ -f "$f" ] && cp -p "$f" "$out/"
+    if [ -f "$f" ]; then cp -p "$f" "$out/"; fi
 done
 for d in unit weather-history; do
-    [ -d "$data/$d" ] && cp -pr "$data/$d" "$out/"
+    if [ -d "$data/$d" ]; then cp -pr "$data/$d" "$out/"; fi
 done
 tar -C "$tmp" -czf "$tmp/$name.tar.gz" "$name"
+rm -rf -- "${out:?}"
 (cd "$tmp" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
-echo "$tmp $name"
+done_ok=1
+printf '%s\n%s\n' "$tmp" "$name"
 REMOTE
 )
-read -r tmp name <<< "$remote"
+tmp=$(printf '%s\n' "$remote" | sed -n 1p)
+name=$(printf '%s\n' "$remote" | sed -n 2p)
 case $tmp in
     */em-backup.??????) ;;
     *) echo "unexpected answer from the host: $remote" >&2; exit 1 ;;
 esac
+case $name in
+    energymanager-backup-????-??-??T??????Z) ;;
+    *) echo "unexpected answer from the host: $remote" >&2; exit 1 ;;
+esac
 
-cleanup_remote() {
-    # Only the temporary folder this run created, named em-backup.XXXXXX.
-    ssh "$host" bash -s -- "$tmp" <<'CLEAN'
+check=""
+cleanup() {
+    [ -z "$check" ] || rm -rf -- "${check:?}"
+    # Only the temporary folder this run created on the host, named em-backup.XXXXXX.
+    ssh "$host" "bash -s -- $(printf '%q' "$tmp")" <<'CLEAN'
 case $1 in */em-backup.??????) rm -rf -- "${1:?}" ;; esac
 CLEAN
 }
-trap cleanup_remote EXIT
+trap cleanup EXIT
 
-target="$dest/${name#energymanager-backup-}"
-mkdir -p "$target"
-scp -q "$host:$tmp/$name.tar.gz" "$host:$tmp/$name.tar.gz.sha256" "$target/"
-(cd "$target" && sha256sum -c --quiet "$name.tar.gz.sha256")
+stamp=${name#energymanager-backup-}
+partial="$dest/$stamp.partial"
+final="$dest/$stamp"
+[ ! -e "$final" ] && [ ! -e "$partial" ] || { echo "already exists: $final" >&2; exit 1; }
+mkdir -p "$partial"
+scp -q "$host:$tmp/$name.tar.gz" "$host:$tmp/$name.tar.gz.sha256" "$partial/"
+(cd "$partial" && sha256sum -c --quiet "$name.tar.gz.sha256")
 
 check=$(mktemp -d)
-trap 'rm -rf -- "${check:?}"; cleanup_remote' EXIT
-tar -C "$check" -xzf "$target/$name.tar.gz"
+tar -C "$check" -xzf "$partial/$name.tar.gz"
 python3 - "$check/$name" <<'PY'
 import os, sqlite3, sys
 root = sys.argv[1]
-stores = [os.path.join(d, f) for d, _, files in os.walk(root) for f in files if f.endswith((".sqlite", ".db"))]
-for path in sorted(stores):
+expected = ["collector/collector.sqlite", "forecasts/forecasts.sqlite", "homeassistant/home-assistant_v2.db"]
+for rel in expected:
+    path = os.path.join(root, rel)
+    if not os.path.exists(path):
+        sys.exit(f"missing in the archive: {rel}")
     result = sqlite3.connect(f"file:{path}?mode=ro", uri=True).execute("PRAGMA integrity_check").fetchone()[0]
-    print(f"{os.path.relpath(path, root)}: {result}")
+    print(f"{rel}: {result}")
     if result != "ok":
-        sys.exit(f"integrity check failed: {path}")
-if not stores:
-    sys.exit("the archive holds no store")
+        sys.exit(f"integrity check failed: {rel}")
 PY
-echo "Backup checked: $target/$name.tar.gz ($(du -h "$target/$name.tar.gz" | cut -f1))"
+mv -- "$partial" "$final"
+echo "Backup checked: $final/$name.tar.gz ($(du -h "$final/$name.tar.gz" | cut -f1))"
