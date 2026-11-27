@@ -1,8 +1,9 @@
 """Collect what the inverter and the heat pump hold beyond Home Assistant's entities
 (change collect-device-details; design/research/rct-onecta-data.md).
 
-- Every minute: the inverter's battery and inverter state objects and its MPP
-  target and last global rescan on input A, raw (E10, E14).
+- Every minute: the inverter's battery and inverter state objects, its MPP
+  target and last global rescan on input A, and the battery's state of charge,
+  raw (E10, E14, S5).
 - Every 10 s, one query of the inverter's own logs, alternating between a walk
   back to the oldest entry it returns and, every hour for each series, a fill
   from the present back to the newest stored entry, so gaps of any length are
@@ -55,7 +56,10 @@ MPP_OBJECTS = (
     "dc_conv.dc_conv_struct[0].rescan_correction",
     "dc_conv.dc_conv_struct[0].u_target",
 )
-STATE_OBJECTS = CORE_STATE_OBJECTS + MPP_OBJECTS
+# The battery's state of charge (a fraction), live, for the solar headroom (requirements S5): the
+# inverter's 5-minute log of it reaches the store only with the hourly catch-up. Not core either.
+LIVE_OBJECTS = ("battery.soc",)
+STATE_OBJECTS = CORE_STATE_OBJECTS + MPP_OBJECTS + LIVE_OBJECTS
 # Time series this inverter never answers. logger.year_log_ts gives no quantity, unlike its year_*
 # siblings, and rctclient gives it no description; from 2026-11-25 to 27 every one of about 2,200
 # queries timed out or came back garbled. Its walk could never end, so the collector queried it every

@@ -32,6 +32,7 @@ ETA = ROUND_TRIP ** 0.5  # per direction
 # Inputs older than this give no headroom (spec: an input is missing).
 MAX_FORECAST_AGE = timedelta(hours=6)
 MAX_RECORD_AGE = timedelta(hours=2)  # the inverter's records reach the collector about an hour late
+LIVE_SOC_AGE = timedelta(minutes=5)  # the collector reads the live state of charge every minute
 
 TOLERANCE_KWH = 0.001  # extra import still counted as none (rounding in the simulation)
 CURVE_DAYS = 28
@@ -73,7 +74,18 @@ def records(collector_conn, series: str, since: datetime, offset_s: int) -> list
 
 
 def latest_soc(collector_conn, offset_s: int, now: datetime) -> tuple[datetime, float]:
-    """(UTC time, state of charge as a fraction) of the latest record."""
+    """(UTC time, state of charge as a fraction): the live value the collector reads every
+    minute if it is at most LIVE_SOC_AGE old, else the latest of the inverter's 5-minute
+    records, which reach the store with the hourly catch-up."""
+    try:
+        live = collector_conn.execute(
+            "SELECT read_at, value FROM state WHERE object = 'battery.soc' ORDER BY read_at DESC LIMIT 1").fetchone()
+    except sqlite3.OperationalError:  # a store from before the live value was read
+        live = None
+    if live is not None:
+        t = fa.parse_time(live[0])
+        if timedelta(0) <= now - t <= LIVE_SOC_AGE:
+            return t, live[1]
     row = collector_conn.execute("SELECT ts, value FROM log_entry WHERE series = ? ORDER BY ts DESC LIMIT 1",
                                  (LOG_SERIES["soc"],)).fetchone()
     if row is None:

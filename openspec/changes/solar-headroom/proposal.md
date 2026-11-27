@@ -37,6 +37,7 @@ Satisfied: E23, E24 and E26 (must), E25 (should). All four have scenarios.
 ## Impact
 
 - `archive/forecast_archive.py`: new functions and an endpoint `/headroom`; a new table in the archive's database. It reads the collector's database read-only, as `/control-strategies` does.
+- `collector/collector.py`: the battery's state of charge (`battery.soc`) is read every minute with the other live objects, read-only.
 - `homeassistant/packages/forecast_archive.yaml`: one REST sensor. `homeassistant/dashboards/energymanager.yaml`: one card.
 - README: a short section on what the headroom is and how far to trust it.
 - No new dependency. Nothing writes to a device.

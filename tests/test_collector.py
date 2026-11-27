@@ -101,6 +101,7 @@ STATE_VALUES = {
     "dc_conv.last_rescan": 1_795_000_000,
     "dc_conv.dc_conv_struct[0].rescan_correction": -3.5,
     "dc_conv.dc_conv_struct[0].u_target": 412.5,
+    "battery.soc": 0.4375,
 }
 MPP_OBJECTS = ("dc_conv.last_rescan", "dc_conv.dc_conv_struct[0].rescan_correction",
                "dc_conv.dc_conv_struct[0].u_target")
@@ -120,12 +121,14 @@ class StateTest(unittest.TestCase):
         return self.conn.execute(f"SELECT * FROM {table}").fetchall()
 
     def test_calibration_recorded_raw(self):
-        """E10: every state object is stored raw, e.g. bat_status 1032 (charging and discharging bits)."""
+        """E10: every state object is stored raw, e.g. bat_status 1032 (charging and discharging bits);
+        S5: the state of charge with them, every minute."""
         fake = FakeInverter(STATE_VALUES)
         self.addCleanup(fake.close)
         stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port), T0, pause=lambda s: None)
         self.assertEqual(stored, {k: float(v) for k, v in STATE_VALUES.items()})
-        self.assertEqual(len(self.rows("state")), 8)
+        self.assertEqual(len(self.rows("state")), 9)
+        self.assertEqual(stored["battery.soc"], 0.4375)
         self.assertEqual(self.rows("failure"), [])
         self.assertEqual({c for c, _ in fake.commands}, {Command.READ})
 
@@ -157,7 +160,7 @@ class StateTest(unittest.TestCase):
 
     def test_mpp_object_cut_twice_recorded(self):
         """E14, E2: an MPP object cut on the retry too has no value for the minute and a failure entry;
-        the other seven are stored."""
+        the other eight are stored."""
         target = "dc_conv.dc_conv_struct[0].u_target"
         fake = FakeInverter(STATE_VALUES, cut=[target], cut_times=2)
         self.addCleanup(fake.close)
@@ -230,7 +233,7 @@ class StateTest(unittest.TestCase):
         stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port, timeout=1), T0,
                                pause=lambda s: None)
         self.assertNotIn("battery.status", stored)
-        self.assertEqual(len(stored), 7)
+        self.assertEqual(len(stored), len(STATE_VALUES) - 1)
         self.assertEqual([r[1] for r in self.rows("failure")], ["state"])
 
     def test_unreachable_is_a_gap(self):

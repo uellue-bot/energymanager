@@ -278,6 +278,26 @@ def world(now: datetime, pv_today_w: float = 0.0):
     return arch, coll
 
 
+class LiveSocTest(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 11, 27, 12, 0, 40, tzinfo=timezone.utc)
+        self.conn = collector({hr.LOG_SERIES["soc"]: [(self.now - timedelta(hours=1), 0.5)]})
+        self.conn.execute("CREATE TABLE state (read_at TEXT, object TEXT, value REAL)")
+
+    def test_live_value_preferred_when_fresh(self):
+        """The collector's minute read of battery.soc is used instead of the hour-old record."""
+        self.conn.execute("INSERT INTO state VALUES (?, 'battery.soc', 0.62)", (fa.iso(self.now - timedelta(seconds=40)),))
+        self.assertEqual(hr.latest_soc(self.conn, OFFSET, self.now), (self.now - timedelta(seconds=40), 0.62))
+
+    def test_stale_live_value_falls_back_to_the_record(self):
+        self.conn.execute("INSERT INTO state VALUES (?, 'battery.soc', 0.62)", (fa.iso(self.now - timedelta(minutes=9)),))
+        self.assertEqual(hr.latest_soc(self.conn, OFFSET, self.now)[1], 0.5)
+
+    def test_store_without_state_table_uses_the_record(self):
+        conn = collector({hr.LOG_SERIES["soc"]: [(self.now - timedelta(hours=1), 0.5)]})
+        self.assertEqual(hr.latest_soc(conn, OFFSET, self.now)[1], 0.5)
+
+
 class ForecastTest(unittest.TestCase):
     def test_late_evening_forecast_is_complete(self):
         """Review finding: at 22:30 UTC the 48 h reach into the fourth UTC day of Open-Meteo."""
