@@ -642,7 +642,7 @@ class BaselineModelTest(unittest.TestCase):
         self.assertGreater(model["rms_out_of_sample_eur"], model["rms_cost_eur"])
         self.assertLess(model["r2_cost"], 1.0)
         self.assertIsNotNone(model["lag1_autocorrelation"])
-        # Errors inside and outside the heating period (weeks colder than the 14 °C base); each
+        # Errors inside and outside the heating season (weeks colder than the 14 °C base); each
         # week's band is two out-of-sample errors of its period.
         periods = model["periods"]
         self.assertEqual(list(periods), ["heating", "outside"])
@@ -666,7 +666,7 @@ class BaselineModelTest(unittest.TestCase):
         self.assertIsNone(model)  # all degree days 0: the degree-day term cannot be fitted
 
     def test_known_heating_decides_the_period_and_cooling_weeks_stay_out(self):
-        """A baseline week known to be unheated is outside the heating period even when colder
+        """A baseline week known to be unheated is outside the heating season even when colder
         than the base temperature; a week of another strategy is judged by temperature alone,
         since the strategy decides whether to heat; a week with cooling is not fitted."""
         weeks = synthetic_baseline()

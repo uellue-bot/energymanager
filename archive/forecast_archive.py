@@ -478,12 +478,12 @@ def baseline_model(weeks: list[dict], grid_price: float, feed_in_price: float) -
     BASE_TEMPERATURES with the smallest squared error of the priced result. Every week then
     gets the baseline's expected import, feed-in and net cost under that week's weather, and
     the saving = expected − actual cost. Checks: the error with each quarter of a year left out of the
-    fit in turn (out of sample), overall and separately inside and outside the heating period,
+    fit in turn (out of sample), overall and separately inside and outside the heating season,
     since weeks without heating are far easier to predict; the lag-1 autocorrelation of the
     residuals; and whether a week's degree days and PV yield lie within 90-110 % of the
     baseline's range. Each week's `band_eur` is two out-of-sample errors of its period.
 
-    A baseline week is in the heating period if the heat pump heated in it (`heated`); where
+    A baseline week is in the heating season if the heat pump heated in it (`heated`); where
     that is unknown, and for every week of another strategy, which itself decides whether to
     heat, if it was colder than the fitted base temperature, the house's heating limit. (The
     lowest mean temperature of the weeks known to be unheated was tried as the limit and
@@ -539,7 +539,7 @@ def baseline_model(weeks: list[dict], grid_price: float, feed_in_price: float) -
     rms_out = rms(list(out.values()))
 
     def period(w):
-        """The heating period (Heizperiode): the baseline heated that week, or would have."""
+        """The heating season (Heizperiode): the baseline heated that week, or would have."""
         if w["strategy"] == "baseline" and w["result"] == "actual" and w.get("heated") is not None:
             return "heating" if w["heated"] else "outside"
         return "heating" if w["temperature_c"] < base else "outside"
