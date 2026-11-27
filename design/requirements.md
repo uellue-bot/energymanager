@@ -183,6 +183,7 @@ Markers per item: [answered] said or confirmed by the principal; [record] taken 
 ### 2.8 Portability and distribution
 
 - [answered] Open source on GitHub. The pilot runs as a container next to Home Assistant Container; a Home Assistant add-on comes later, for P2.
+- [answered] For now the project is research: collecting data and trying models and optimizers in the pilot. Turning it into a product for others is a separate topic, taken up later (principal, 2026-11-27). Until then, work that only serves other users, such as hallway tests with a fresh user, is not done unless the principal asks for it.
 
 ### 2.9 Jurisdictions
 
