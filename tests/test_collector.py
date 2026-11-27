@@ -1,4 +1,5 @@
-"""Tests for collector/collector.py (change collect-device-details, examples E2, E10, E11 and E12).
+"""Tests for collector/collector.py (changes collect-device-details and collect-pv-health-inputs,
+examples E2, E10, E11, E12 and E14).
 
 The inverter is a local TCP server that answers frames like the real one.
 Needs rctclient (collector/Dockerfile); skipped without it, e.g.
@@ -35,11 +36,13 @@ class FakeInverter:
     """Answers READ frames from `values` (object name -> value).
 
     `cut` names objects whose answer is cut in half `cut_times` times, the way
-    the real inverter answers when another client interrupts it.
+    the real inverter answers when another client interrupts it. `silent` names
+    objects that get no answer at all.
     """
 
-    def __init__(self, values, cut=(), cut_times=1, logs=None, chunk=3):
+    def __init__(self, values, cut=(), cut_times=1, logs=None, chunk=3, silent=()):
         self.values = values
+        self.silent = set(silent)
         self.logs = logs or {}  # series name -> [(ts, value)]
         self.chunk = chunk
         self.cut = set(cut)
@@ -68,6 +71,9 @@ class FakeInverter:
                         continue
                     oinfo = REGISTRY.get_by_id(frame.id)
                     self.commands.append((frame.command, oinfo.name))
+                    if oinfo.name in self.silent:
+                        frame = ReceiveFrame()
+                        continue
                     if frame.command == Command.WRITE:  # a log query: entries before the timestamp
                         before = int.from_bytes(frame.data, "big")
                         older = [e for e in self.logs.get(oinfo.name, []) if e[0] < before][-self.chunk:]
@@ -92,7 +98,12 @@ STATE_VALUES = {
     "battery.status": 0,
     "battery.status2": 0,
     "prim_sm.state": 6,
+    "dc_conv.last_rescan": 1_795_000_000,
+    "dc_conv.dc_conv_struct[0].rescan_correction": -3.5,
+    "dc_conv.dc_conv_struct[0].u_target": 412.5,
 }
+MPP_OBJECTS = ("dc_conv.last_rescan", "dc_conv.dc_conv_struct[0].rescan_correction",
+               "dc_conv.dc_conv_struct[0].u_target")
 
 
 @unittest.skipIf(REGISTRY is None, "rctclient is not installed")
@@ -114,9 +125,92 @@ class StateTest(unittest.TestCase):
         self.addCleanup(fake.close)
         stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port), T0, pause=lambda s: None)
         self.assertEqual(stored, {k: float(v) for k, v in STATE_VALUES.items()})
-        self.assertEqual(len(self.rows("state")), 5)
+        self.assertEqual(len(self.rows("state")), 8)
         self.assertEqual(self.rows("failure"), [])
         self.assertEqual({c for c, _ in fake.commands}, {Command.READ})
+
+    def test_mpp_objects_every_minute(self):
+        """E14: the three MPP objects are read every minute with the others, raw; a rescan shows as a
+        new last-rescan time with the correction and target of the same minute. Only reads are sent."""
+        fake = FakeInverter(dict(STATE_VALUES))
+        self.addCleanup(fake.close)
+        inverter = lambda: co.Inverter("127.0.0.1", fake.port)  # noqa: E731
+        co.read_state(self.conn, inverter, T0, pause=lambda s: None)
+        fake.values.update({"dc_conv.last_rescan": 1_795_000_050,
+                            "dc_conv.dc_conv_struct[0].rescan_correction": 7.25,
+                            "dc_conv.dc_conv_struct[0].u_target": 405.0})
+        minute = T0.replace(minute=1)
+        co.read_state(self.conn, inverter, minute, pause=lambda s: None)
+        rows = self.conn.execute("SELECT read_at, object, value FROM state WHERE object IN (?, ?, ?) "
+                                 "ORDER BY read_at, object", MPP_OBJECTS).fetchall()
+        self.assertEqual(rows, [
+            (co.iso(T0), "dc_conv.dc_conv_struct[0].rescan_correction", -3.5),
+            (co.iso(T0), "dc_conv.dc_conv_struct[0].u_target", 412.5),
+            (co.iso(T0), "dc_conv.last_rescan", 1_795_000_000.0),
+            (co.iso(minute), "dc_conv.dc_conv_struct[0].rescan_correction", 7.25),
+            (co.iso(minute), "dc_conv.dc_conv_struct[0].u_target", 405.0),
+            (co.iso(minute), "dc_conv.last_rescan", 1_795_000_050.0),
+        ])
+        self.assertEqual(self.rows("failure"), [])
+        self.assertEqual({c for c, _ in fake.commands}, {Command.READ})
+        self.assertEqual(co.status(self.conn)["last_success"]["state"], co.iso(minute))
+
+    def test_mpp_object_cut_twice_recorded(self):
+        """E14, E2: an MPP object cut on the retry too has no value for the minute and a failure entry;
+        the other seven are stored."""
+        target = "dc_conv.dc_conv_struct[0].u_target"
+        fake = FakeInverter(STATE_VALUES, cut=[target], cut_times=2)
+        self.addCleanup(fake.close)
+        stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port, timeout=1), T0,
+                               pause=lambda s: None)
+        self.assertEqual(set(stored), set(STATE_VALUES) - {target})
+        failures = self.rows("failure")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0][1], "state")
+        self.assertTrue(failures[0][2].startswith(target + ":"), failures[0][2])
+
+    def test_mpp_nan_at_night_is_a_gap_not_an_alert(self):
+        """E14, night (assumed): an MPP object answering NaN leaves a gap, records no failure, and the
+        state still counts as read, so the "state not read" alert stays quiet."""
+        # The two float objects; the last rescan is an integer and cannot be NaN. NaN used to break
+        # the minute's insert (the value column is NOT NULL) and lose the other objects' values.
+        nan = {n: float("nan") for n in co.MPP_OBJECTS if n != "dc_conv.last_rescan"}
+        fake = FakeInverter(dict(STATE_VALUES, **nan))
+        self.addCleanup(fake.close)
+        stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port), T0, pause=lambda s: None)
+        self.assertEqual(set(stored), set(STATE_VALUES) - set(nan))
+        self.assertEqual(self.rows("failure"), [])
+        self.assertEqual(co.status(self.conn)["last_success"]["state"], co.iso(T0))
+
+    def test_mpp_no_answer_is_a_failure_not_an_alert(self):
+        """E14, review of 2026-11-23: an MPP object that gets no answer, even on the retry, is recorded
+        as a failure, unlike a NaN; the core objects are stored and the state still counts as read.
+        Whether the inverter does this at night is checked after the test deploy (task 3.2)."""
+        target = "dc_conv.dc_conv_struct[0].u_target"
+        fake = FakeInverter(STATE_VALUES, silent=[target])
+        self.addCleanup(fake.close)
+        stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port, timeout=1), T0,
+                               pause=lambda s: None)
+        self.assertEqual(set(stored), set(STATE_VALUES) - {target})
+        failures = self.rows("failure")
+        self.assertEqual([(r[1], r[2].split(":")[0]) for r in failures], [("state", target)])
+        self.assertEqual(co.status(self.conn)["last_success"]["state"], co.iso(T0))
+
+    def test_core_nan_is_a_failure_not_a_lost_minute(self):
+        """A core object answering NaN is recorded as a failure, the other objects of the minute are
+        stored, and the state does not count as read. The core objects are integers, so the inverter
+        cannot send NaN for them; the read is patched to guard the branch anyway."""
+        target = "power_mng.state"
+        fake = FakeInverter(STATE_VALUES)
+        self.addCleanup(fake.close)
+        real_read = co.Inverter.read
+        nan_read = lambda inv, name: float("nan") if name == target else real_read(inv, name)  # noqa: E731
+        with unittest.mock.patch.object(co.Inverter, "read", nan_read):
+            stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port), T0,
+                                   pause=lambda s: None)
+        self.assertEqual(set(stored), set(STATE_VALUES) - {target})
+        self.assertEqual([(r[1], r[2]) for r in self.rows("failure")], [("state", f"{target}: value is NaN")])
+        self.assertIsNone(co.status(self.conn)["last_success"]["state"])
 
     def test_cut_frame_retried(self):
         """A cut answer is retried once, after a pause, over a new connection; the value is then stored."""
@@ -136,7 +230,7 @@ class StateTest(unittest.TestCase):
         stored = co.read_state(self.conn, lambda: co.Inverter("127.0.0.1", fake.port, timeout=1), T0,
                                pause=lambda s: None)
         self.assertNotIn("battery.status", stored)
-        self.assertEqual(len(stored), 4)
+        self.assertEqual(len(stored), 7)
         self.assertEqual([r[1] for r in self.rows("failure")], ["state"])
 
     def test_unreachable_is_a_gap(self):

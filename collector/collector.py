@@ -1,7 +1,8 @@
 """Collect what the inverter and the heat pump hold beyond Home Assistant's entities
 (change collect-device-details; design/research/rct-onecta-data.md).
 
-- Every minute: the inverter's battery and inverter state objects, raw (E10).
+- Every minute: the inverter's battery and inverter state objects and its MPP
+  target and last global rescan on input A, raw (E10, E14).
 - Every 10 s, one query of the inverter's own logs, alternating between a walk
   back to the oldest entry it returns and, every hour for each series, a fill
   from the present back to the newest stored entry, so gaps of any length are
@@ -39,13 +40,22 @@ from rctclient.registry import REGISTRY
 from rctclient.types import Command, DataType, ObjectGroup
 from rctclient.utils import decode_value, encode_value
 
-STATE_OBJECTS = (
+CORE_STATE_OBJECTS = (
     "power_mng.state",
     "battery.bat_status",
     "battery.status",
     "battery.status2",
     "prim_sm.state",
 )
+# The MPP tracker of input A and its global rescans (E14), to tell a rescan from shading. Whether
+# the inverter answers them at night is not known: a NaN is a gap, not a failure, and these objects
+# do not count for the state's last success, which the "state not read" alert watches.
+MPP_OBJECTS = (
+    "dc_conv.last_rescan",
+    "dc_conv.dc_conv_struct[0].rescan_correction",
+    "dc_conv.dc_conv_struct[0].u_target",
+)
+STATE_OBJECTS = CORE_STATE_OBJECTS + MPP_OBJECTS
 LOG_SERIES = tuple(sorted(o.name for o in REGISTRY.all()
                           if o.group == ObjectGroup.LOGGER and o.response_data_type == DataType.TIMESERIES))
 TIMEOUT_S = 5
@@ -236,7 +246,12 @@ def read_state(conn: sqlite3.Connection, inverter: Callable[[], Inverter], now: 
                                 pause(RETRY_PAUSE_S)
                                 continue
                             raise _Unreachable(str(e)) from e
-                    stored[name] = float(inv.read(name))
+                    value = float(inv.read(name))
+                    if math.isnan(value):  # a float object may answer NaN, which SQLite cannot store
+                        if name not in MPP_OBJECTS:
+                            record_failure(conn, now, "state", f"{name}: value is NaN")
+                    else:
+                        stored[name] = value
                     break
                 except InverterError as e:
                     if inv is not None:
@@ -420,8 +435,9 @@ def status(conn: sqlite3.Connection) -> dict:
                            "ORDER BY read_at DESC LIMIT 1", (name,)).fetchone()
         if row:
             latest[name] = {"read_at": row[0], "value": row[1]}
-    # The state counts as read only when every object was: the oldest latest read.
-    last = min((v["read_at"] for v in latest.values()), default=None) if len(latest) == len(STATE_OBJECTS) else None
+    # The state counts as read only when every core object was: the oldest of their latest reads.
+    core = [latest[n]["read_at"] for n in CORE_STATE_OBJECTS if n in latest]
+    last = min(core) if len(core) == len(CORE_STATE_OBJECTS) else None
     last_log = conn.execute("SELECT max(read_at) FROM log_entry").fetchone()[0]
     oldest = conn.execute("SELECT min(ts) FROM log_entry WHERE series LIKE 'logger.minutes_%'").fetchone()[0]
     latest_day = conn.execute("SELECT max(day) FROM energy_period").fetchone()[0]
@@ -507,7 +523,7 @@ def main():
             if clock >= next_state:
                 next_state = clock - clock % 60 + 60
                 stored = read_state(conn, inverter, now)
-                if len(stored) < len(STATE_OBJECTS):
+                if any(n not in stored for n in CORE_STATE_OBJECTS):
                     print(f"{iso(now)} state: {len(stored)} of {len(STATE_OBJECTS)} read", flush=True)
             elif clock >= next_energy:
                 next_energy = clock + 900
