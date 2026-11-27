@@ -4,7 +4,7 @@ Personas for walk-throughs and hallway tests. The pilot is built for P1 first, t
 
 ## P1 Pilot operator: the principal
 
-- **Who:** owner of the pilot house. Knows the heat pump, the house's physics and numerical optimisation (JAX, optimistix) well. New to Home Assistant.
+- **Who:** owner of the pilot house. Knows the heat pump, the house's physics and numerical optimisation (JAX, optimistix) well. New to Home Assistant. No longer codes by hand: works through coding agents and judges results on dashboards, not in notebooks (2026-11-23).
 - **Wants:** reliable recorded data from all sources, one dashboard, and a model and optimizer that verifiably save grid energy without stressing the floor or compromising hot-water hygiene.
 - **Has:** a Windows PC with WSL2 (development and testing), a Linux mini PC for later, a Daikin Altherma with Onecta, an RCT inverter and battery, a forecast.solar estimate, maybe a Zigbee thermometer later.
 - **Would never read:** marketing material and generic Home Assistant beginner guides beyond what is needed.
