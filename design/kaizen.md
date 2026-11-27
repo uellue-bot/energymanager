@@ -3,7 +3,7 @@
 What leaves a debrief: proposals with decisions, the fate of earlier ones, what did not fit in the plugin's skills, and notes for the next debrief. The full reports are private, in `.claude/debriefs/`.
 
 Public: yes, since 2026-11-22 (github.com/uellue/energymanager); asked 2026-11-21, decided 2026-11-22.
-Message size: OK ("7 message length is OK!"), asked 2026-11-22; earlier "a bit on the long side perhaps" (2026-11-21).
+Message size: OK ("Message length was fine!"), asked 2026-11-27; earlier OK (2026-11-22), "a bit on the long side perhaps" (2026-11-21).
 Debrief cadence: offered when a stretch of work winds down ("so far the debrief suggestions came right at the correct moment"), 2026-11-22.
 
 ## Proposals
@@ -46,6 +46,19 @@ Declined 2026-11-22: pinning Python packages by hash and container images by dig
 | 6 | Record what stayed in chat: the photo-to-table tool (a project issue); December 2024 left out of the baseline season; frost protection while the unit is off as an expectation to check, not a fact; "test on the host before the PR" next to the deploy rule | project (issue, requirements, AGENTS.md) | small | photo recipe accepted 2026-11-23 as issue uellue-bot/energymanager#15 (verdict: little to generalize, a recipe, a script only if batches recur); frost protection settled 2026-11-23 (out of scope; the unit's own control, recorded in the requirements); "test before PR" declined as a rule 2026-11-23 (a draft PR, then a test, then the merge works as well; testing first made sense here because the change is tied to the unit and the data on the PC); baseline from January 2025 recorded in the requirements 2026-11-23 (November and December 2024 left out: the house was not lived in yet) |
 | 7 | A watch runs for the agreed duration in one Monitor call (`timeout_ms`), not re-armed every 30 minutes at full context | agent memory | small | declined as a memory 2026-11-23 (too detailed; covered once asynchronous workflows exist); posted as point 20 on uellue-bot/skills#3 |
 
+Status 2026-11-27: the hand-over gates of row 1 were applied without being asked (rebuild by area, skipped tests named, review findings listed, `range-diff` after the merge); the hook of row 3 blocked two inline edits; row 5 recurred a third time (see 2026-11-27 row 2).
+
+### 2026-11-27 (remote access, a Daikin gap, comparing control strategies, backup)
+| # | Proposal | Destination | Effort | Decision / status |
+|---|---|---|---|---|
+| 1 | A hand-over that follows agreed leans opens with the deviations, one line each, before any other news (a reversed rule was reported inside a 25-line message and read as still current 30 minutes later) | comment on uellue-bot/skills#5 | small | open |
+| 2 | Stating a hypothesis as fact recurred a third time (a claim about night-time base load, refuted from experience and then by the data already on the PC); a "strongest argument against" cites a query or is marked unchecked | comment on uellue-bot/skills#7 | small | open |
+| 3 | "Tracker read since the last pull request" as a gate of the hand-over flow (no read before four pull requests in one session, although AGENTS.md asks for it) | comment on uellue-bot/skills#5 | small | open |
+| 4 | Say in AGENTS.md what one OK for `deploy.sh --test` covers: one deploy, or a branch until its pull request is merged (one OK covered five or more deploys) | AGENTS.md | small | open |
+| 5 | Record two decisions that live only in chat: the README's audience (readers who know physics and maths but are not experts, plain English) and asking before the agent uses the clipboard | AGENTS.md | small | open |
+| 6 | Glossary entries for "heating period" (a week in which the heat pump actually heated) and "base temperature" (of the energy signature), read as one thing during review | GLOSSARY.md | small | open |
+| 7 | Feedback on Remote Control (sharing screenshots and files worked very smoothly; the controlled session needs wide privileges for reasons that are not clear; to be mitigated), together with the open note on trusting agents compared with packages | skills repository, issue or comment | small | requested by the principal 2026-11-27; destination to confirm |
+
 ## Skill friction
 - 2026-11-21, update (first rollout): the step "work on a branch" assumes existing commits; in an empty repository the setup became the first commit on `main`. The rollout offers `AGENTS.md` without saying that Claude Code only reads `CLAUDE.md`, so an import is needed.
 - 2026-11-21, requirements: the principal answered in solution terms several times (loss functions, generic ODE core) and deferred many details "to practice". The frontier rounds worked, but the hand-over list grew long; a "deferred to practice" marker separate from [unknown] would fit this project better.
@@ -56,6 +69,9 @@ Declined 2026-11-22: pinning Python packages by hash and container images by dig
 - 2026-11-23, walkthrough: the persona's phase was not part of the inputs; the walk started at daily use after the switchover and had to be reframed by the principal to the evaluation phase before it. A "which phase of the project" input would have caught it. Sent upstream 2026-11-23 as uellue-bot/skills#6.
 - 2026-11-23, sync: the project's guard blocks `gh … --json` with titles, so the tracker listing had numbers, states and authors only; titles came from memory and the ledger. A listing mode in `tools/gh_watch.py` or `gh_thread.py` (number, author, title fenced as untrusted) would fit. The template's tracker section had no slot for a fork-based setup (issues in the fork, pull requests upstream by compare link). → uellue-bot/skills#9
 - 2026-11-23, debrief: the stretch since the last debrief began in the middle of a session that opened with that debrief, so the readers got line ranges, split at the overnight gap. A decision inventory in the reader brief, added by hand this time, again gave the clearest list of what lives only in chat.
+- 2026-11-27, standing instructions: the debrief was offered three times in one session (before a merge, after it, and after two more merges), against "once per stretch"; what counts as a stretch is not defined.
+- 2026-11-27, hallway test: a README chapter was tested by a fresh reader with the principal's questions, by hand rather than through the skill; it worked. The skill has no ready form for "documentation for a named audience, with that audience's questions".
+- 2026-11-27, debrief: the decision inventory was added to the reader brief by hand for the third time; it belongs in the template.
 
 ## Notes for the next debrief
 - 2026-11-21: first rollout of kaizen 0.6.1-dev.2; no issue tracker yet, so no first look at issues (the first `/kaizen:sync` starts from here once a tracker exists). Settled 2026-11-23: first sync done.
@@ -63,5 +79,6 @@ Declined 2026-11-22: pinning Python packages by hash and container images by dig
 - 2026-11-22, the principal: enshrine the way histories were prepared for review (WIP commits while building; before the pull request, a rebuild on main into a few commits by area with explanatory messages, verified against a backup; rebase merge); "I prefer it for my work". Filed as uellue-bot/skills#5. Routed 2026-11-22: part of proposal 2.
 - 2026-11-22, the principal: whether an agent working over SSH as a bot account on a remote machine is a good pattern; their view: the blast radius is not larger than running locally or in a VM, as long as the machine and its services are not critical and the account cannot reach credentials. Open; the conditions are to be checked for the automation PC. Found 2026-11-22: the bot's account there is in the `docker` group, which grants root-level access to the host. Accepted for now by the principal on 2026-11-23 (the PC is not critical, the account holds no credentials); the alternatives were a sudoers rule for a root-owned `deploy.sh` and read-only commands, or rootless Docker. Settled 2026-11-23.
 - 2026-11-23, the principal: one chat and one working thread carry several ideas in parallel. Wanted: a broker that does not block, and sub-agents that do their work without crowding the main log. Separate sessions seemed to get in each other's way. Related: the coordination layer in uellue-bot/skills#3, point 16. Routed 2026-11-23: comment on uellue-bot/skills#3, points 17–19.
-- 2026-11-22, the principal: how far to trust agents compared with packages pulled from PyPI. Kept as a note: one boundary for both, by limiting what they can reach. Stays for a later debrief (sync 2026-11-23).
+- 2026-11-22, the principal: how far to trust agents compared with packages pulled from PyPI. Kept as a note: one boundary for both, by limiting what they can reach. Stays for a later debrief (sync 2026-11-23). Proposed 2026-11-27: posted upstream together with 2026-11-27 row 7.
+- 2026-11-27, the principal: the level of detail in the top-level README against separate docs may need tuning once docs beyond `design/` and the README exist; fine at this stage.
 - 2026-11-23: sync. Tracker read up to here: fork issues #1–#15, pull requests 1–13 on uellue/energymanager.
