@@ -12,7 +12,7 @@
 ## 3. Checks before and after deployment
 
 - [x] 3.1 Read Open-Meteo's terms for the satellite API and note in `design/research/pv-battery-model.md` whether one call per hour for a private site is allowed and what attribution it needs. Verify: the note cites the page and date.
-- [ ] 3.2 After the principal's OK, deploy with `tools/deploy.sh`. After 24 h on the automation PC: 24 satellite fetches or recorded failures; the three objects stored every minute; the Home Assistant integration's unavailable count compared with the 24 h before. Verify: the numbers in the hand-over.
+- [x] 3.2 After the principal's OK, deploy with `tools/deploy.sh`. After 24 h on the automation PC: 24 satellite fetches or recorded failures; the three objects stored every minute; the Home Assistant integration's unavailable count compared with the 24 h before. Verify: the numbers in the hand-over.
 
 ## 4. Review and documentation
 
@@ -22,3 +22,7 @@
 ## 5. Hallway test
 
 - [ ] 5.1 Hallway test (kaizen hallway-test) for E13 and E14: a fresh agent with only the README, the requirements and the examples finds the satellite irradiance of one hour and the last rescan time in the stores and reads them from Python. Deferred like 6.1 of `collect-device-details` unless the principal asks for it. Verify: a record in `design/hallway/`, findings fixed or filed.
+
+## Check on the automation PC (2026-11-27, read-only)
+
+- 3.2: test deploy from 2026-11-23 09:16 UTC, checked after four days instead of one (the principal was away). On 24, 25 and 26 Nov: 24 satellite fetches per day, none failed; 1440 rows per day for each of the three MPP objects, also at night (no NaN). Home Assistant's `sensor.rct*` unavailable states per day: 1792, 1765, 1509, against 804 and 1372 on 21 and 22 Nov. Part of the rise is the collector's walk through the inverter's logs, which ended on 25 Nov, and from then on its retries of `logger.year_log_ts`, which the inverter never answered (now left out). `last_rescan` and `rescan_correction` read 0 throughout: whether they show rescans is still open.
