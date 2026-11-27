@@ -12,7 +12,7 @@ The state polling (group 2) goes first: the next calibration is due between 2026
 - [x] 2.1 Read the five state objects once a minute (C4) and store them; record failures. Unit tests against a fake inverter (a local TCP server answering recorded frames) cover a normal read, a cut frame with retry, and an unreachable inverter (gap, failure recorded). Verify: tests cite E10 and E2.
 - [x] 2.2 Endpoint on 127.0.0.1 and `rest` sensor (C8); the dashboard shows the battery state machine and raw battery status. Verify: on the automation PC, both sensors have values within 2 minutes of start.
 - [ ] 2.3 Alert "collector state not read for 10 minutes" in `alerts.yaml`. Verify: stopping the collector for 15 minutes raises it on the phone; starting it clears it.
-- [ ] 2.4 Check the load on the inverter: compare the integration's unavailable count over 24 h before and after the collector started. Verify: numbers in the hand-over; if worse, adjust C4 and say how.
+- [x] 2.4 Check the load on the inverter: compare the integration's unavailable count over 24 h before and after the collector started. Verify: numbers in the hand-over; if worse, adjust C4 and say how.
 
 ## 3. Inverter logs (E11)
 
@@ -24,7 +24,7 @@ The state polling (group 2) goes first: the next calibration is due between 2026
 ## 4. Heat pump energy periods (E12)
 
 - [x] 4.1 The daily read of C7 with an all-or-nothing parse. Unit tests with a diagnostics document recorded on the automation PC, with identifiers replaced by placeholders, cover a normal day, a missing key (nothing stored, failure recorded) and a repeated read (no duplicate). Verify: tests cite E12.
-- [ ] 4.2 On the automation PC, after two nights: twelve periods each for space heating and hot water per day, and their sums equal the integration's daily totals for those days. Verify: the numbers in the hand-over.
+- [x] 4.2 On the automation PC, after two nights: twelve periods each for space heating and hot water per day, and their sums equal the integration's daily totals for those days. Verify: the numbers in the hand-over.
 - [ ] 4.3 Alert "heat pump periods missing for yesterday at 06:00". Verify: with the diagnostics URL pointed at a wrong entry, the alert is raised the next morning, or by calling the check directly.
 
 ## 5. Documentation and review
@@ -41,3 +41,9 @@ The state polling (group 2) goes first: the next calibration is due between 2026
 - 4.1: the test document is synthetic, shaped like the diagnostics of `daikin_onecta` 5.0.4 as observed on the automation PC, rather than a recorded one with identifiers replaced; it holds no value from the site.
 - 5.2: the review found, among others, that gaps longer than one answer were never filled, that an unexpected diagnostics shape could crash the collector in a loop, that an all-NaN answer stalled the walk, and a guard that allowed `logger.log_rate`. All are fixed with tests; two assumptions (clock correction, DST days) are recorded in `design/research/rct-onecta-data.md`.
 - 2.3: the first test showed the alert firing after 37 s, because the sensor turns unavailable at once on a restart; a 5-minute delay was added. Its verification is still to be repeated.
+
+## Checks on the automation PC (2026-11-23, read-only)
+
+- 4.2: twelve periods per day and mode for 2026-11-21 and 22. Sums: space heating 18 and 21 kWh, hot water 2 and 5 kWh, exactly the unit's own daily figures read from its display the same morning (`unit-panel-figures.csv`). The integration's daily sensors show less (heating 15 and 19 kWh at their last update of the day): they update only a few times a day and miss the day's end. The periods are the better daily figure.
+- 2.4, open: drop-outs of the integration's 80 RCT sensors, 24 h after the collector started (2026-11-22 08:17 UTC) against the 22.4 h before: transitions to unavailable 1688 against 1106 per 24 h (household load: 39 against 22), but total unavailable time of the household load 23 against 116 min, longest 71 s against 104 min. The window before includes the move from the laptop to the automation PC, so the two are not comparable; more short drop-outs with the collector is plausible. Accepted by the principal (2026-11-23: "if it works it works"); C4 unchanged.
+- 3.3, still running: 16 of 44 log series read (15 complete). The 5-minute series reach back to 2026-08-25/27 (about 25,000 entries each), the daily series 785 entries, the oldest stamped 2000-01-01 (the inverter's clock before it was set). The night to 2026-11-22 is covered (121 entries of `logger.minutes_ebat_log_ts` for 10 hours). 739 log-read failures in 24 h, checksum errors from the second client, each retried by the walk.
