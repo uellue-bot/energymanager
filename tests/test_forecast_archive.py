@@ -6,13 +6,15 @@ and place name, so they must not be committed.
 """
 
 import json
+import math
 import sqlite3
 import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -339,6 +341,367 @@ class SatelliteTest(ArchiveCase):
             "past_days": ["1"], "forecast_days": ["1"], "timezone": ["UTC"],
             "models": ["dwd_sis_europe_africa_v4"]})
         self.assertIs(service.issued_at, fa.no_issue_time)
+
+
+def history_body(start: datetime, hours: int, value=lambda t: 5.0) -> bytes:
+    """An archive-API-like response (neutral coordinates, synthetic values): hourly temperature_2m
+    from `start` (UTC) for `hours` hours."""
+    times = [start + timedelta(hours=h) for h in range(hours)]
+    return json.dumps({
+        "latitude": 52.52, "longitude": 13.41, "utc_offset_seconds": 0, "timezone": "GMT",
+        "hourly_units": {"time": "iso8601", "temperature_2m": "°C"},
+        "hourly": {"time": [t.strftime("%Y-%m-%dT%H:%M") for t in times],
+                   "temperature_2m": [value(t) for t in times]},
+    }).encode()
+
+
+def collector_store(path: str, days: dict) -> sqlite3.Connection:
+    """A collector-like store with the inverter's daily logs:
+    {date: (load, import, feed-in, PV input A, PV input B) in Wh}."""
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE log_entry (series TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL,"
+                 " read_at TEXT NOT NULL, UNIQUE (series, ts))")
+    for day, values in days.items():
+        ts = int(datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).timestamp())
+        for series, sign, value in zip(fa.DAILY_SERIES, (1, 1, -1, 1, 1), values):
+            conn.execute("INSERT INTO log_entry VALUES (?, ?, ?, '')", (series, ts, sign * value))
+    conn.commit()
+    return conn
+
+
+BERLIN = fa.ZoneInfo("Europe/Berlin")
+
+
+class HistoryTest(ArchiveCase):
+    """E20: Open-Meteo's historical temperature, fetched once a day and kept as fetched."""
+
+    def test_url_first_from_baseline_start_then_two_weeks(self):
+        env = {"EM_LATITUDE": "52.52", "EM_LONGITUDE": "13.41", "EM_DECLINATION": "30",
+               "EM_AZIMUTH": "-10", "EM_KWP": "5"}
+        service = {s.name: s for s in fa.services_from_env(env)}[fa.HISTORY]
+        self.assertTrue(service.daily)
+        query = lambda: parse_qs(urlsplit(service.url(self.conn, T0)).query)  # noqa: E731
+        self.assertEqual(query(), {
+            "latitude": ["52.52"], "longitude": ["13.41"], "start_date": ["2025-01-01"],
+            "end_date": ["2026-11-01"], "hourly": ["temperature_2m"], "timezone": ["UTC"]})
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, error) VALUES (?, ?, 'HTTP 500')",
+                          (fa.HISTORY, fa.iso(T0)))
+        self.assertEqual(query()["start_date"], ["2025-01-01"])  # a failed fetch does not count
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                          (fa.HISTORY, fa.iso(T0 - timedelta(days=1)), history_body(T0, 1)))
+        self.assertEqual(query()["start_date"], ["2026-10-18"])  # 14 days before the last success
+
+    def test_days_missed_while_fetches_failed_are_filled(self):
+        env = {"EM_LATITUDE": "52.52", "EM_LONGITUDE": "13.41", "EM_DECLINATION": "30",
+               "EM_AZIMUTH": "-10", "EM_KWP": "5"}
+        service = {s.name: s for s in fa.services_from_env(env)}[fa.HISTORY]
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                          (fa.HISTORY, "2026-10-01T00:02:00+00:00", history_body(T0, 1)))
+        for d in range(1, 32):  # a month of failures
+            self.conn.execute("INSERT INTO fetch (service, fetched_at, error) VALUES (?, ?, 'HTTP 500')",
+                              (fa.HISTORY, fa.iso(datetime(2026, 10, d, 0, 2, tzinfo=timezone.utc))))
+        query = parse_qs(urlsplit(service.url(self.conn, T0)).query)
+        self.assertEqual((query["start_date"], query["end_date"]), (["2026-09-17"], ["2026-11-01"]))
+
+    def test_once_per_day(self):
+        base = f"http://127.0.0.1:{self.fake.server.server_port}"
+        service = fa.Service(fa.HISTORY, lambda conn, now: base + "/solar", fa.no_issue_time, daily=True)
+        outcomes = [fa.fetch_once(self.conn, service, T0 + timedelta(hours=h, minutes=2)) for h in range(30)]
+        self.assertEqual(outcomes.count("ok"), 2)  # 2026-11-02 00:02 and 2026-11-03 00:02
+        self.assertEqual(outcomes[24], "ok")
+
+    def test_later_response_revises_and_null_keeps(self):
+        start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+        for fetched, value in ((T0, lambda t: 1.0), (T0 + timedelta(days=1), lambda t: None if t.hour else 2.0)):
+            self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                              (fa.HISTORY, fa.iso(fetched), history_body(start, 24, value)))
+        temps = fa.history_temperatures(self.conn)
+        self.assertEqual(temps[start], 2.0)
+        self.assertEqual(temps[start + timedelta(hours=5)], 1.0)
+
+    def test_local_day_mean_on_the_dst_day(self):
+        """2026-10-25 has 25 hours in Berlin; one missing hour gives no mean."""
+        start = datetime(2026, 10, 24, tzinfo=timezone.utc)
+        temps = fa.history_temperatures(self.conn)
+        temps.update({start + timedelta(hours=h): float(h) for h in range(72)})
+        day = date(2026, 10, 25)
+        first = datetime(2026, 10, 24, 22, tzinfo=timezone.utc)  # local midnight, UTC+2
+        expected = sum(float((first - start) / timedelta(hours=1) + h) for h in range(25)) / 25
+        self.assertAlmostEqual(fa.day_mean_temperature(temps, day, BERLIN), expected)
+        del temps[first + timedelta(hours=3)]
+        self.assertIsNone(fa.day_mean_temperature(temps, day, BERLIN))
+
+
+class ControlStrategyTest(ArchiveCase):
+    """E20, E21: weekly electricity cost over outdoor temperature and the weekly solar spill."""
+
+    MONDAY = date(2025, 3, 3)
+
+    def setUp(self):
+        super().setUp()
+        start = datetime(2025, 3, 1, tzinfo=timezone.utc)
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                          (fa.HISTORY, fa.iso(T0), history_body(start, 24 * 20, lambda t: 4.0)))
+        self.collector_db = str(Path(self.tmp.name, "collector.sqlite"))
+        # Mon-Sun: 20 kWh load, 10 kWh import, 3 kWh feed-in, 12 + 1 kWh PV each day; one more
+        # day the next week.
+        days = {self.MONDAY + timedelta(days=d): (20000, 10000, 3000, 12000, 1000) for d in range(8)}
+        self.collector = collector_store(self.collector_db, days)
+
+    def tearDown(self):
+        self.collector.close()
+        super().tearDown()
+
+    def test_a_complete_week(self):
+        weeks = fa.control_strategy_weeks(self.conn, self.collector, 0.30, 0.08, BERLIN)
+        self.assertEqual(len(weeks), 1)  # the week with only its Monday is left out
+        week = weeks[0]
+        self.assertEqual((week["week"], week["start"], week["temperature_c"]), ("2025-W10", "2025-03-03", 4.0))
+        # Net cost 7 × (10 kWh × 0.30 − 3 kWh × 0.08) = 19.32 €; spill 7 × 3 kWh at 0.22 €/kWh.
+        self.assertEqual((week["cost_eur"], week["spill_kwh"], week["spill_eur"]), (19.32, 21.0, 4.62))
+        self.assertEqual((week["load_kwh"], week["import_kwh"], week["feed_kwh"], week["pv_kwh"]),
+                         (140.0, 70.0, 21.0, 91.0))
+        self.assertEqual(week["daily_mean_c"], [4.0] * 7)
+        self.assertEqual((week["strategy"], week["result"]), ("baseline", "actual"))
+
+    def test_heating_from_the_collectors_periods(self):
+        """Without the periods' table nothing is known; with it, a week with heating on one day
+        counts as heated."""
+        self.assertEqual(fa.control_strategy_weeks(self.conn, self.collector, 0.30, 0.08, BERLIN)[0]["heated"],
+                         None)
+        self.collector.execute("CREATE TABLE energy_period (day TEXT, period_start_local TEXT, period_start_utc"
+                               " TEXT, management_point TEXT, mode TEXT, kwh REAL, read_at TEXT)")
+        for d in range(7):
+            day = (self.MONDAY + timedelta(days=d)).isoformat()
+            for mode, kwh in (("heating", 3.0 if d == 2 else 0.0), ("cooling", 0.0)):
+                self.collector.execute("INSERT INTO energy_period VALUES (?, '', '', 'climateControl', ?, ?, '')",
+                                       (day, mode, kwh))
+        self.collector.commit()
+        week = fa.control_strategy_weeks(self.conn, self.collector, 0.30, 0.08, BERLIN)[0]
+        self.assertEqual((week["heated"], week["cooled"]), (True, False))
+
+    def test_null_or_unreadable_history_removes_nothing(self):
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                          (fa.HISTORY, fa.iso(T0 + timedelta(days=1)),
+                           history_body(datetime(2025, 3, 3, tzinfo=timezone.utc), 1, lambda t: None)))
+        self.conn.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                          (fa.HISTORY, fa.iso(T0 + timedelta(days=2)), b"not json"))
+        self.assertEqual(len(fa.control_strategy_weeks(self.conn, self.collector, 0.30, 0.08, BERLIN)), 1)
+
+    def test_a_missing_daily_value_drops_the_week(self):
+        monday = int(datetime(2025, 3, 3, 23, 59, 59, tzinfo=timezone.utc).timestamp())
+        self.collector.execute("DELETE FROM log_entry WHERE series = 'logger.day_egrid_feed_log_ts'"
+                               " AND ts = ?", (monday,))
+        self.collector.commit()
+        self.assertEqual(fa.control_strategy_weeks(self.conn, self.collector, 0.30, 0.08, BERLIN), [])
+
+    def test_a_day_without_temperature_drops_the_week(self):
+        archive = fa.connect(str(Path(self.tmp.name, "gap.sqlite")))
+        start = datetime(2025, 3, 1, tzinfo=timezone.utc)
+        gap = datetime(2025, 3, 5, 12, tzinfo=timezone.utc)
+        archive.execute("INSERT INTO fetch (service, fetched_at, body) VALUES (?, ?, ?)",
+                        (fa.HISTORY, fa.iso(T0), history_body(start, 24 * 20,
+                                                              lambda t: None if t == gap else 4.0)))
+        try:
+            self.assertEqual(fa.control_strategy_weeks(archive, self.collector, 0.30, 0.08, BERLIN), [])
+        finally:
+            archive.close()
+
+    def test_endpoint(self):
+        handler = fa.make_handler(self.db, 7.92, collector_db=self.collector_db, prices=(0.30, 0.08), tz=BERLIN)
+        missing = fa.make_handler(self.db, 7.92, collector_db=str(Path(self.tmp.name, "none.sqlite")))
+        no_log = str(Path(self.tmp.name, "no-log.sqlite"))
+        sqlite3.connect(no_log).execute("CREATE TABLE other (x)").connection.close()
+        unreadable = fa.make_handler(self.db, 7.92, collector_db=no_log)
+        for h in (handler, missing, unreadable):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), h)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            url = f"http://127.0.0.1:{server.server_port}/control-strategies"
+            try:
+                if h is handler:
+                    with urllib.request.urlopen(url) as response:
+                        data = json.load(response)
+                    self.assertEqual(data["prices"], {"grid_eur_per_kwh": 0.30, "feed_in_eur_per_kwh": 0.08})
+                    self.assertIsNone(data["model"])  # one week is too few to fit
+                    self.assertNotIn("daily_mean_c", data["weeks"][0])
+                    self.assertEqual([w["week"] for w in data["weeks"]], ["2025-W10"])
+                else:
+                    with self.assertRaises(urllib.error.HTTPError) as e:
+                        urllib.request.urlopen(url)
+                    self.assertEqual(e.exception.code, 503)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+
+def synthetic_week(start: date, temps: list[float], pv: float, base: float = 14.0,
+                   strategy: str = "baseline", import_cut: float = 0.0) -> dict:
+    """A week as control_strategy_weeks returns it, with import and feed-in made exactly by
+    known coefficients: import = 5 + 2·HDD − 0.1·PV + 0.5·HDD·PV/100 − import_cut,
+    feed-in = 1 + 0.2·HDD + 0.8·PV − 0.3·HDD·PV/100."""
+    hdd = sum(max(0.0, base - t) for t in temps)
+    imp = 5 + 2 * hdd - 0.1 * pv + 0.5 * hdd * pv / 100 - import_cut
+    feed = 1 + 0.2 * hdd + 0.8 * pv - 0.3 * hdd * pv / 100
+    return {"week": start.isoformat(), "start": start.isoformat(), "daily_mean_c": temps,
+            "temperature_c": sum(temps) / 7, "pv_kwh": pv, "import_kwh": imp, "feed_kwh": feed,
+            "cost_eur": imp * 0.30 - feed * 0.08, "strategy": strategy, "result": "actual"}
+
+
+def synthetic_baseline(weeks: int = 104) -> list[dict]:
+    """Two years of weeks with temperatures and PV yields that vary independently enough to fit."""
+    result = []
+    for k in range(weeks):
+        start = date(2025, 1, 6) + timedelta(weeks=k)
+        mean = 9 - 9 * math.cos(2 * math.pi * k / 52)
+        temps = [mean + ((3 * k + d) % 5) - 2 for d in range(7)]
+        pv = 160 - 120 * math.cos(2 * math.pi * k / 52) + 30 * ((5 * k) % 3 - 1)  # 10 to 310 kWh
+        result.append(synthetic_week(start, temps, pv))
+    return result
+
+
+class HeatPumpModeTest(unittest.TestCase):
+    """Whether the heat pump heated or cooled in a week, from the 2-hour periods or the unit's
+    monthly figures."""
+
+    def test_monthly_figures_from_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "unit-panel-figures.csv")
+            path.write_text(
+                "resolution,period_start,period_end,heating_produced_kwh,heating_consumed_kwh,note\n"
+                "month,2026-06-01,2026-07-01,0,0,\n"
+                "month,2026-10-01,2026-11-01,328,72,\n"
+                "day,2026-11-16,2026-11-17,40,10,\n"
+                "month,2026-12-01,2027-01-01,,,unreadable\n", encoding="utf-8")
+            self.assertEqual(fa.unit_months(str(path)), {(2026, 6): 0.0, (2026, 10): 328.0})
+            self.assertEqual(fa.unit_months(str(Path(tmp, "missing.csv"))), {})
+            # As a spreadsheet saves it (byte-order mark), with a short last row.
+            path.write_bytes(b"\xef\xbb\xbfresolution,period_start,heating_produced_kwh\r\n"
+                             b"month,2026-06-01,0\r\nmonth\r\n")
+            self.assertEqual(fa.unit_months(str(path)), {(2026, 6): 0.0})
+            path.write_bytes(b"resolution,period_start\n\xff\xfe not text\n")  # unreadable: no months
+            self.assertEqual(fa.unit_months(str(path)), {})
+
+    def test_periods_first_then_months(self):
+        june = [date(2026, 6, 8) + timedelta(days=d) for d in range(7)]
+        months = {(2026, 6): 0.0, (2026, 10): 328.0}
+        self.assertEqual(fa.heat_pump_modes(june, {}, months), (False, None))
+        october = [date(2026, 10, 5) + timedelta(days=d) for d in range(7)]
+        self.assertEqual(fa.heat_pump_modes(october, {}, months), (None, None))
+        periods = {d: {"heating": 0.0, "cooling": 0.0} for d in june}
+        periods[june[3]]["cooling"] = 2.0
+        self.assertEqual(fa.heat_pump_modes(june, periods, months), (False, True))  # off: from the month
+        self.assertEqual(fa.heat_pump_modes(june, periods, {}), (None, True))  # whole kWh prove no "off"
+        periods[june[0]]["heating"] = 1.0
+        self.assertEqual(fa.heat_pump_modes(june, periods, months), (True, True))
+        across = [date(2026, 9, 28) + timedelta(days=d) for d in range(7)]  # September and October
+        self.assertEqual(fa.heat_pump_modes(across, {}, {(2026, 9): 0.0, (2026, 10): 328.0}), (None, None))
+
+
+class BaselineModelTest(unittest.TestCase):
+    """E22: the adjusted baseline, fitted on the baseline weeks."""
+
+    def test_recovers_base_temperature_and_coefficients(self):
+        weeks = synthetic_baseline()
+        model = fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertEqual(model["base_temperature_c"], 14.0)
+        self.assertEqual(model["import_coefficients"], [5.0, 2.0, -0.1, 0.5])
+        self.assertEqual(model["feed_coefficients"], [1.0, 0.2, 0.8, -0.3])
+        self.assertEqual((model["r2_cost"], model["rms_cost_eur"], model["rms_out_of_sample_eur"]),
+                         (1.0, 0.0, 0.0))
+        self.assertEqual(model["baseline_weeks"], 104)
+        self.assertTrue(all(abs(w["saving_eur"]) < 0.01 and w["in_range"] for w in weeks))
+
+    def test_a_strategy_week_is_compared_with_the_baseline_under_its_weather(self):
+        """A week of another strategy that imports 20 kWh less saves 20 × 0.30 = 6 € and does not
+        enter the fit."""
+        weeks = synthetic_baseline()
+        weeks.append(synthetic_week(date(2027, 1, 4), [2.0] * 7, 60.0, strategy="optimizer", import_cut=20))
+        model = fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertEqual(model["baseline_weeks"], 104)
+        self.assertEqual(weeks[-1]["saving_eur"], 6.0)
+        self.assertEqual(weeks[-1]["hdd"], 84.0)
+
+    def test_weather_outside_the_baselines_range_is_flagged(self):
+        weeks = synthetic_baseline()
+        weeks.append(synthetic_week(date(2027, 1, 4), [-20.0] * 7, 60.0, strategy="optimizer"))
+        weeks.append(synthetic_week(date(2027, 1, 11), [2.0] * 7, 1.0, strategy="optimizer"))  # PV low
+        weeks.append(synthetic_week(date(2027, 1, 18), [2.0] * 7, 60.0, strategy="optimizer"))
+        fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertEqual([w["in_range"] for w in weeks[-3:]], [False, False, True])
+
+    def test_noise_shows_in_and_out_of_sample(self):
+        """With noise on the import, the error out of sample is larger than in sample, and the
+        autocorrelation pairs only consecutive weeks."""
+        weeks = synthetic_baseline()
+        for k, w in enumerate(weeks):
+            noise = 8.0 * (((7 * k) % 11) / 10 - 0.5)  # deterministic, between −4 and +4 kWh
+            w["import_kwh"] += noise
+            w["cost_eur"] += noise * 0.30
+        model = fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertGreater(model["rms_cost_eur"], 0.1)
+        self.assertGreater(model["rms_out_of_sample_eur"], model["rms_cost_eur"])
+        self.assertLess(model["r2_cost"], 1.0)
+        self.assertIsNotNone(model["lag1_autocorrelation"])
+        # Errors inside and outside the heating period (weeks colder than the 14 °C base); each
+        # week's band is two out-of-sample errors of its period.
+        periods = model["periods"]
+        self.assertEqual(list(periods), ["heating", "outside"])
+        self.assertEqual(periods["heating"]["weeks"], sum(w["temperature_c"] < 14.0 for w in weeks))
+        self.assertEqual(periods["heating"]["weeks"] + periods["outside"]["weeks"], 104)
+        january, july = weeks[2], weeks[27]  # 2025-01-20, 2025-07-14
+        for week, name in ((january, "heating"), (july, "outside")):
+            self.assertEqual(week["heating_period"], name == "heating")
+            self.assertAlmostEqual(week["band_eur"], 2 * periods[name]["rms_out_of_sample_eur"],
+                                   delta=0.02)  # both rounded to cents
+        every_other = weeks[::2]  # no two consecutive weeks left: no pair, no autocorrelation
+        self.assertIsNone(fa.baseline_model(every_other, 0.30, 0.08)["lag1_autocorrelation"])
+
+    def test_degenerate_baseline_raises_nothing_unhandled(self):
+        """Equal cost every week: no R², but no error either."""
+        weeks = [synthetic_week(date(2025, 1, 6) + timedelta(weeks=k), [20.0] * 7, 100.0 + k)
+                 for k in range(30)]
+        for w in weeks:
+            w["import_kwh"], w["feed_kwh"], w["cost_eur"] = 10.0, 0.0, 3.0
+        model = fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertIsNone(model)  # all degree days 0: the degree-day term cannot be fitted
+
+    def test_known_heating_decides_the_period_and_cooling_weeks_stay_out(self):
+        """A baseline week known to be unheated is outside the heating period even when colder
+        than the base temperature; a week of another strategy is judged by temperature alone,
+        since the strategy decides whether to heat; a week with cooling is not fitted."""
+        weeks = synthetic_baseline()
+        cold_unheated = weeks[10]  # 2025-03-17, mean temperature below the 14 °C base
+        self.assertLess(cold_unheated["temperature_c"], 14.0)
+        cold_unheated["heated"] = False
+        strategy = synthetic_week(date(2027, 1, 4), [5.0] * 7, 60.0, strategy="optimizer")
+        strategy["heated"] = False
+        cooled = synthetic_week(date(2027, 7, 5), [22.0] * 7, 250.0)
+        cooled["cooled"], cooled["import_kwh"] = True, 999.0  # would spoil the fit if used
+        model = fa.baseline_model(weeks + [strategy, cooled], 0.30, 0.08)
+        self.assertFalse(cold_unheated["heating_period"])
+        self.assertTrue(strategy["heating_period"])
+        self.assertEqual((model["baseline_weeks"], model["cooling_weeks_left_out"]), (104, 1))
+        self.assertEqual(model["weeks_known_unheated"], 1)
+        self.assertEqual(model["import_coefficients"], [5.0, 2.0, -0.1, 0.5])
+
+    def test_too_few_baseline_weeks(self):
+        self.assertIsNone(fa.baseline_model(synthetic_baseline(fa.MIN_BASELINE_WEEKS - 1), 0.30, 0.08))
+
+    def test_december_belongs_to_the_next_years_winter_quarter(self):
+        self.assertEqual(fa.quarter({"start": "2025-12-01"}), (2026, 0))
+        self.assertEqual(fa.quarter({"start": "2026-02-23"}), (2026, 0))
+        self.assertEqual(fa.quarter({"start": "2026-03-02"}), (2026, 1))
+
+    def test_an_unknown_baseline_week_above_the_base_is_outside(self):
+        weeks = synthetic_baseline()
+        warm = next(w for w in weeks if w["temperature_c"] >= 14.0)
+        warm["heated"] = None
+        fa.baseline_model(weeks, 0.30, 0.08)
+        self.assertFalse(warm["heating_period"])
+
+    def test_least_squares_refuses_dependent_regressors(self):
+        with self.assertRaises(ZeroDivisionError):
+            fa.least_squares([[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]], [1.0, 2.0, 3.0])
 
 
 class Helpers(unittest.TestCase):

@@ -32,8 +32,19 @@ services:
       EM_KWP: ${EM_KWP:?set in .env}
       EM_ARCHIVE_PORT: ${EM_ARCHIVE_PORT:-8765}
       EM_ARCHIVE_DB: /data/forecasts.sqlite
+      # The collector's store, read (never written) for the weekly cost (E20, E21).
+      EM_COLLECTOR_DB: /collector/collector.sqlite
+      EM_GRID_PRICE_EUR_PER_KWH: ${EM_GRID_PRICE_EUR_PER_KWH:-0.30}
+      EM_FEED_IN_PRICE_EUR_PER_KWH: ${EM_FEED_IN_PRICE_EUR_PER_KWH:-0.08}
+      TZ: Europe/Berlin
     volumes:
       - ${EM_DATA_DIR:?set in .env}/forecasts:/data
+      # Not mounted read-only: reading a store in WAL mode needs write access to
+      # its shared-memory file. The archive opens it with mode=ro.
+      - ${EM_DATA_DIR:?set in .env}/collector:/collector
+      # Figures read from the heat pump's display, if any (README, "Comparing
+      # control strategies"): unit-panel-figures.csv.
+      - ${EM_DATA_DIR:?set in .env}/unit:/unit:ro
 
   collector:
     build: ./collector
