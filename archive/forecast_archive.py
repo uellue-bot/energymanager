@@ -1,9 +1,10 @@
 """Keep every solar and weather forecast as issued (spec: forecast-archive).
 
-Once per hour, fetches the forecast.solar estimate and the Open-Meteo weather
-forecast for the site and appends each raw response, with its fetch time and the
-issue time the service states, to an SQLite database. Failed fetches are kept as
-well. A read-only HTTP endpoint on 127.0.0.1 serves the hourly series that the
+Once per hour, fetches the forecast.solar estimate, the Open-Meteo weather
+forecast and Open-Meteo's satellite irradiance of the past day and today so far for the site
+(spec: satellite-radiation-archive) and appends each raw response, with its
+fetch time and the issue time the service states, to an SQLite database. Failed
+fetches are kept as well. A read-only HTTP endpoint on 127.0.0.1 serves the hourly series that the
 dashboard compares with measured production (example E5).
 
 Settings come from environment variables only (see .env.example). Standard
@@ -25,6 +26,10 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 FORECAST_SOLAR = "forecast.solar"
 OPEN_METEO = "open-meteo"
+SATELLITE = "open-meteo-satellite"
+SATELLITE_MODEL = "dwd_sis_europe_africa_v4"  # DWD's product from EUMETSAT MTG, Europe
+SATELLITE_VARIABLES = ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation",
+                       "global_tilted_irradiance")
 TIMEOUT_S = 30
 
 SCHEMA = """
@@ -79,11 +84,20 @@ def services_from_env(env=os.environ) -> list[Service]:
         "hourly": "temperature_2m,cloud_cover,global_tilted_irradiance",
         "tilt": dec, "azimuth": az, "forecast_days": 3, "timezone": "UTC",
     })
+    satellite_query = urlencode({
+        "latitude": lat, "longitude": lon, "hourly": ",".join(SATELLITE_VARIABLES),
+        "tilt": dec, "azimuth": az, "past_days": 1, "forecast_days": 1, "timezone": "UTC",
+        # The satellite product alone: the default "seamless" model fills hours not yet
+        # observed with forecast values. With this one they stay null (checked 2026-11-23).
+        "models": SATELLITE_MODEL,
+    })
     return [
         Service(FORECAST_SOLAR,
                 f"https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc",
                 forecast_solar_issued_at),
         Service(OPEN_METEO, f"https://api.open-meteo.com/v1/forecast?{open_meteo_query}",
+                no_issue_time),
+        Service(SATELLITE, f"https://satellite-api.open-meteo.com/v1/archive?{satellite_query}",
                 no_issue_time),
     ]
 
@@ -145,6 +159,39 @@ def latest_before(conn, service: str, t: datetime) -> dict | None:
     if row is None:
         return None
     return {"fetched_at": row[0], "issued_at": row[1], "body": row[2]}
+
+
+def satellite_hour(conn, start: datetime) -> dict | None:
+    """Satellite irradiance (W/m²) of the hour beginning at `start`, from the latest response covering it.
+
+    Open-Meteo labels each hourly value with the end of the hour it is the mean
+    of, so the hour [start, start + 1 h) is the entry labelled start + 1 h.
+    Returns the four quantities (None where the service had no value) and the
+    response's fetch time, or None when no kept response covers the hour.
+    """
+    if start.tzinfo is None:  # naive times are UTC here, as in parse_time
+        start = start.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    label = (start + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M")
+    rows = conn.execute(
+        "SELECT fetched_at, body FROM fetch WHERE service = ? AND error IS NULL AND fetched_at > ?"
+        " ORDER BY fetched_at DESC",
+        (SATELLITE, iso(start)),
+    )
+    empty = None
+    for fetched_at, body in rows:
+        try:
+            hourly = json.loads(body)["hourly"]
+            i = hourly["time"].index(label)
+            values = {name: hourly[name][i] for name in SATELLITE_VARIABLES}
+        except (ValueError, KeyError, TypeError, IndexError):
+            continue  # does not cover the hour, or not a readable response
+        hour = {"start": iso(start), "fetched_at": fetched_at, **values}
+        if any(v is not None for v in values.values()):
+            return hour
+        # All null: fetched before the hour was observed. An older response may have it.
+        empty = empty or hour
+    return empty
 
 
 def forecast_solar_hourly_wh(body: bytes) -> dict[datetime, float]:
