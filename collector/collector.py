@@ -56,8 +56,14 @@ MPP_OBJECTS = (
     "dc_conv.dc_conv_struct[0].u_target",
 )
 STATE_OBJECTS = CORE_STATE_OBJECTS + MPP_OBJECTS
+# Time series this inverter never answers. logger.year_log_ts gives no quantity, unlike its year_*
+# siblings, and rctclient gives it no description; from 2026-11-25 to 27 every one of about 2,200
+# queries timed out or came back garbled. Its walk could never end, so the collector queried it every
+# 70 s, which loaded the inverter for nothing (design/research/rct-onecta-data.md).
+UNANSWERED_SERIES = ("logger.year_log_ts",)
 LOG_SERIES = tuple(sorted(o.name for o in REGISTRY.all()
-                          if o.group == ObjectGroup.LOGGER and o.response_data_type == DataType.TIMESERIES))
+                          if o.group == ObjectGroup.LOGGER and o.response_data_type == DataType.TIMESERIES
+                          and o.name not in UNANSWERED_SERIES))
 TIMEOUT_S = 5
 RETRY_PAUSE_S = 2
 LOG_INTERVAL_S = 10

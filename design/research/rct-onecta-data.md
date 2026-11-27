@@ -35,6 +35,10 @@ The inverter keeps its own logs as time series (`logger.minutes_*`, `day_*`, `mo
 
 - Assumption, not verified: if the inverter's clock is corrected (or switches to winter time on its own), entries of the hour around the change carry times that may repeat. The collector keeps the first entry for a given time (`UNIQUE (series, ts)`), so up to two hours per series could be lost there; the `clock` table shows when it happened.
 
+### A log series the inverter never answers (checked 2026-11-27)
+
+`logger.year_log_ts` got no usable answer from 2026-11-25 to 27 (rctclient 0.0.6): of about 2,200 queries, 2,001 timed out, 205 failed the checksum and 3 came back as an unknown command, while the other series answered over the same connection. Unlike its `year_*` siblings, its name gives no quantity, and rctclient gives no description. The collector leaves it out.
+
 ## Daikin Onecta
 
 The cloud data (one device "Altherma", type `heating-wlan`) has a gateway, a climate control (space heating), a hot-water tank, and three units with model and software version.
