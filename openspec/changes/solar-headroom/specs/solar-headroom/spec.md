@@ -13,7 +13,7 @@ The forecast archive SHALL provide, at least every 15 minutes, a forecast for th
 - **THEN** the forecast has 192 steps, each with a start time in UTC, PV, load and headroom in kWh and a state of charge (assumed)
 
 #### Scenario: An input is missing
-- **WHEN** no PV forecast newer than 6 hours or no state of charge newer than 30 minutes is available
+- **WHEN** no PV forecast newer than 6 hours or no state of charge newer than 2 hours is available (the inverter's records reach the collector about an hour late)
 - **THEN** the forecast reports which input is missing and gives no headroom values, never a value computed from stale or invented inputs (E2)
 
 ### Requirement: Headroom is the marginal figure

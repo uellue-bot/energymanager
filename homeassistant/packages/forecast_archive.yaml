@@ -25,3 +25,22 @@ rest:
           - weeks
           - prices
           - model
+
+  # The solar headroom for the next 48 h (requirements S5, spec solar-headroom):
+  # state = the headroom of the next hour in kWh; the 192 quarter-hour steps in
+  # the attribute `steps`; when an input is missing, its reason in `missing` and
+  # no steps. Not recorded (see recorder.yaml): the archive keeps its own record.
+  - resource: http://127.0.0.1:8765/headroom
+    scan_interval: 900
+    sensor:
+      - name: Forecast archive solar headroom
+        unique_id: energymanager_forecast_archive_solar_headroom
+        unit_of_measurement: kWh
+        value_template: "{{ value_json.steps[0].headroom_kwh if value_json.steps else none }}"
+        json_attributes:
+          - steps
+          - missing
+          - made_at
+          - soc_recorded_at
+          - correction_factor
+          - load_fit

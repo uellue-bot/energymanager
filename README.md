@@ -288,3 +288,29 @@ In short: a strategy has to save clearly more than about 13 € in a single heat
 - **Days.** The inverter's daily logs follow its own clock, which still runs on summer time (UTC+2) since it was last set. In winter its day therefore ends an hour before local midnight (at 23:00); over a week this is negligible.
 - **Flexible tariffs.** With prices that change by the hour, weekly totals are not enough: the baseline's import and feed-in would be needed hour by hour. That needs a *simulated* baseline (a model of the house and heat pump running the baseline's schedule under the actual weather), which is planned.
 - **A better test design.** For an evaluation period, strategies may be switched week by week (above all in February and March), so that the weather affects both alike. The dashboard and the records must then always show which strategy was active.
+
+## Solar headroom
+
+The card "Solar headroom, next 48 h" on the overview answers: when can the washing machine, the dishwasher, the oven's self-cleaning or vehicle charging run without buying power from the grid? There is one green bar per quarter hour. Each shows the *solar headroom* of the hour that starts there: the extra energy, in kWh, that can be used in that hour without more grid import anywhere in the next 48 h. Energy in one hour is the same number as the mean power in kW, so a bar of 2 means about 2 kW for that hour.
+
+To use it: pick a start where the bar is at least what the appliance uses in an hour (look it up on the appliance or measure it once). Bars overlap and draw on the same surplus, so the headrooms of two hours do not add up: for two appliances, or a longer run, take the lower of the bars an hour apart and treat it as shared. Requirements: `design/requirements.md`, S5, examples E23 to E26.
+
+It counts the battery. On a sunny day the battery may be full by early afternoon, and the rest goes to the grid. Energy used in the late morning is then not lost: the battery charges a little less and still fills up from what would otherwise have been fed in. So the headroom starts before feed-in does (E23). On a winter evening, or a clear winter day whose sun never fills the battery, there is no headroom: whatever is used then is bought sooner or later (E24, E26).
+
+### How it is computed
+
+The forecast archive (the service described under "Forecast archive" above) computes it every 15 minutes and serves it at `/headroom`, from three parts:
+
+1. **Solar power**: forecast.solar's hourly solar forecast for these panels, spread evenly over the quarter hours. Where forecast.solar has no value (it covers today and tomorrow), Open-Meteo's estimate is used, scaled to forecast.solar's level over the hours both have, since Open-Meteo's estimate leaves out the losses in panels, cabling and inverter.
+2. **Household load**: a daily load curve times an expected daily energy. The curve is the share of each quarter hour in a day's load, averaged over the last 28 days, separately for weekdays and weekends, from the inverter's 5-minute records. The daily energy is fitted on the inverter's daily records since January 2025 in the same way as the baseline in "Comparing control strategies": a constant plus a term for heating degree days. One degree day is one day whose mean outdoor temperature is 1 °C below a base temperature, which the fit chooses; the day's mean temperature comes from Open-Meteo's forecast. On this site the fit gives about 9.6 kWh a day plus 1.7 kWh per degree day below 13.5 °C (2026-11-27).
+3. **Battery**: simulated in quarter hours from its last recorded state of charge. It charges from surplus and discharges for any shortfall, up to 5 kW, between 7 % and 97 % of 5.7 kWh. Over a full charge and discharge it loses 8.4 % of the energy, as derived from the inverter's lifetime counters. Replayed on 14 recorded days with the actual solar power and load, the simulated state of charge stayed within 1–3 percentage points of the recorded one, except on 21 November 2026, when the battery ran a calibration (a full charge it does now and then, which the simple rule does not follow).
+
+The headroom of an hour is then found by trying: add extra consumption to that hour, simulate the 48 h again, and take the largest amount that neither raises the grid import nor leaves the battery emptier at the end of the 48 h (the night after needs that energy).
+
+### How far to trust it
+
+- **The solar forecast is the largest source of error.** Over the first week, the actual daily totals were 0.8 to 2.3 times forecast.solar's. A day that turns out sunnier than forecast has more headroom than shown; a duller one, less.
+- **The load is an average.** It already contains the appliances the household usually runs, so on a day you do run them, part of their energy is in the expected load and the real headroom is slightly higher than shown. The heat pump runs on its schedules, not evenly; the curve shows that only on average.
+- **The inverter's records arrive about an hour late**, so the battery is simulated over that last hour from the forecast. If the inverter's last record is more than two hours old, or the newest solar forecast is more than six hours old, the card says what is missing and shows no headroom.
+- **A correction of the solar forecast is recorded, not shown.** Once the panels have produced at least 1 kWh in a day, the rest of that day's solar forecast can be scaled by what they produced against what was forecast. On 2027-01-31 and 2027-04-30 the recorded headroom forecasts, with and without it, are compared with what happened (issue uellue-bot/energymanager#17); the card switches to the corrected one only if it turns out better.
+- **Every headroom forecast is kept.** Once an hour the forecast archive stores its 192 quarter hours, with and without the correction, in the table `headroom_forecast` of its database (`<EM_DATA_DIR>/forecasts/forecasts.sqlite`), so they can be compared with what the inverter recorded.

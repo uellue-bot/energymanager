@@ -9,3 +9,5 @@ recorder:
       - sensor.forecast_archive_e5
       # Computed from data the archive and the collector keep (E20, E21).
       - sensor.forecast_archive_control_strategies
+      # The archive keeps its own record of the headroom forecasts (E25).
+      - sensor.forecast_archive_solar_headroom
