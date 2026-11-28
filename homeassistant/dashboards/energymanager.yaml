@@ -145,6 +145,62 @@ views:
               return entity.attributes.hours.map(
                 h => [new Date(h.start).getTime(), h.weather_estimate_wh]);
 
+      # S5, E23 to E26: when extra consumption needs no grid import. The bars are
+      # the solar headroom: the energy that can be used in the hour starting at
+      # that quarter hour, so kWh in one hour = kW on average. A first version:
+      # the expected load comes from a daily load curve and the weather (README,
+      # "Solar headroom").
+      - type: vertical-stack
+        cards:
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: Solar headroom, next 48 h (kW)
+            graph_span: 48h
+            span:
+              start: hour
+            yaxis:
+              - min: 0
+                decimals: 1
+            apex_config:
+              legend:
+                show: true
+            series:
+              - entity: sensor.forecast_archive_solar_headroom
+                name: Headroom (kWh in the hour from here)
+                color: "#43a047"
+                type: column
+                show:
+                  legend_value: false
+                data_generator: |
+                  return (entity.attributes.steps || []).map(
+                    s => [new Date(s.start).getTime(), s.headroom_kwh]);
+              - entity: sensor.forecast_archive_solar_headroom
+                name: Solar forecast
+                color: "#1e88e5"
+                type: line
+                stroke_width: 1.5
+                show:
+                  legend_value: false
+                data_generator: |
+                  return (entity.attributes.steps || []).map(
+                    s => [new Date(s.start).getTime(), s.pv_kwh * 4]);
+              - entity: sensor.forecast_archive_solar_headroom
+                name: Expected household load
+                color: "#757575"
+                type: line
+                stroke_width: 1.5
+                show:
+                  legend_value: false
+                data_generator: |
+                  return (entity.attributes.steps || []).map(
+                    s => [new Date(s.start).getTime(), s.load_kwh * 4]);
+          - type: markdown
+            content: |-
+              {% set s = 'sensor.forecast_archive_solar_headroom' %}
+              {% if state_attr(s, 'missing') %}**Not available:** {{ state_attr(s, 'missing') }}
+              {% else %}Headroom in the next hour: **{{ states(s) }} kWh**. Made {{ as_local(as_datetime(state_attr(s, 'made_at'))).strftime('%H:%M') if state_attr(s, 'made_at') else '?' }}; battery from the inverter's record of {{ as_local(as_datetime(state_attr(s, 'soc_recorded_at'))).strftime('%H:%M') if state_attr(s, 'soc_recorded_at') else '?' }}.{% endif %}
+
   # A first try at comparing control strategies (examples E20 to E22), to be
   # tested on the data. Net cost = grid import x grid price - feed-in x feed-in
   # tariff; prices in the archive's settings (.env.example). One card over the

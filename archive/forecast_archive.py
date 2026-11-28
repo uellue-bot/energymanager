@@ -20,6 +20,7 @@ import csv
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
@@ -93,7 +94,8 @@ def services_from_env(env=os.environ) -> list[Service]:
     open_meteo_query = urlencode({
         "latitude": lat, "longitude": lon,
         "hourly": "temperature_2m,cloud_cover,global_tilted_irradiance",
-        "tilt": dec, "azimuth": az, "forecast_days": 3, "timezone": "UTC",
+        # 4 days: the solar headroom's 48 h from late evening reach into the fourth UTC day.
+        "tilt": dec, "azimuth": az, "forecast_days": 4, "timezone": "UTC",
     })
     satellite_query = urlencode({
         "latitude": lat, "longitude": lon, "hourly": ",".join(SATELLITE_VARIABLES),
@@ -597,6 +599,38 @@ def baseline_model(weeks: list[dict], grid_price: float, feed_in_price: float) -
     }
 
 
+def headroom_payload(db_path: str, collector_db: str | None, now: datetime, kwp: float, tz: ZoneInfo,
+                     record: bool = False) -> dict:
+    """The headroom forecast, or {"missing": reason, "steps": []}; with `record`, the forecast
+    is also stored, once per hour (example E25)."""
+    # Imported here, not at the top, since headroom imports this module. `python3 -I` leaves this
+    # file's folder off the path; it is root-owned in the image.
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import headroom
+    if not collector_db or not os.path.exists(collector_db):
+        return {"missing": "the collector's store is not available", "steps": []}
+    conn = connect(db_path)
+    try:
+        collector_conn = sqlite3.connect(f"file:{collector_db}?mode=ro", uri=True)
+        try:
+            result = headroom.forecast(conn, collector_conn, now, kwp, tz)
+        finally:
+            collector_conn.close()
+        if record:
+            headroom.record(conn, result)
+        return result
+    except headroom.Missing as e:
+        return {"missing": str(e), "steps": []}
+    except sqlite3.Error as e:  # e.g. the collector's store is locked or has no log yet
+        return {"missing": f"the collector's store cannot be read: {e}", "steps": []}
+    except (KeyError, TypeError, ValueError, IndexError) as e:  # a stored response of another shape
+        return {"missing": f"an input could not be read: {type(e).__name__}: {e}", "steps": []}
+    finally:
+        conn.close()
+
+
 def make_handler(db_path: str, kwp: float, clock=lambda: datetime.now(timezone.utc),
                  collector_db: str | None = None, prices: tuple[float, float] = (0.30, 0.08),
                  tz: ZoneInfo = ZoneInfo("Europe/Berlin"), unit_figures: str | None = None):
@@ -605,6 +639,9 @@ def make_handler(db_path: str, kwp: float, clock=lambda: datetime.now(timezone.u
             url = urlsplit(self.path)
             if url.path == "/control-strategies":
                 self.control_strategies()
+                return
+            if url.path == "/headroom":
+                self.headroom()
                 return
             if url.path != "/e5":
                 self.send_error(404)
@@ -649,6 +686,12 @@ def make_handler(db_path: str, kwp: float, clock=lambda: datetime.now(timezone.u
                 "prices": {"grid_eur_per_kwh": prices[0], "feed_in_eur_per_kwh": prices[1]},
                 "model": model, "weeks": weeks}).encode())
 
+        def headroom(self):
+            """The solar headroom for the next 48 h (spec: solar-headroom). A missing or stale
+            input gives its reason and no steps (example E2)."""
+            payload = headroom_payload(db_path, collector_db, clock(), kwp, tz)
+            self.send_json(json.dumps(payload).encode())
+
         def send_json(self, payload: bytes):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -683,12 +726,18 @@ def main():
                                                             prices=prices, tz=tz,
                                                             unit_figures=unit_figures))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"forecast archive: {db_path}, endpoints http://{bind}:{port}/e5 and /control-strategies",
-          flush=True)
+    print(f"forecast archive: {db_path}, endpoints http://{bind}:{port}/e5, /control-strategies"
+          " and /headroom", flush=True)
     while True:
         now = datetime.now(timezone.utc)
         for name, outcome in fetch_all(conn, services, now).items():
             print(f"{iso(now)} {name}: {outcome}", flush=True)
+        try:  # the record of the headroom forecast (E25) must never stop the fetches
+            result = headroom_payload(db_path, collector_db, datetime.now(timezone.utc), kwp, tz, record=True)
+            if result.get("missing"):
+                print(f"{iso(now)} headroom: not recorded, {result['missing']}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"{iso(now)} headroom: failed, {type(e).__name__}: {e}", flush=True)
         time.sleep(seconds_until_next_run(datetime.now(timezone.utc)))
 
 
