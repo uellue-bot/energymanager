@@ -21,13 +21,13 @@
 
 ## 4. Home Assistant and documentation
 
-- [ ] 4.1 REST sensor and plotly card (design 7). Verify: after a test deploy, the sensor's state and attributes read through Home Assistant's API; the card's rendering checked by the principal.
+- [x] 4.1 REST sensor and apexcharts card (design 7), first card on the overview. Verify: after a test deploy, the sensor's state and attributes read through Home Assistant's API; the card's rendering checked by the principal.
 - [x] 4.2 README section: what the headroom means, what it is built from, how far to trust it now. Verify: read by a fresh agent with only the README section and the principal's questions; findings fixed.
 - [x] 4.3 Independent review of the branch before the pull request; findings listed with what became of them.
 
 ## 5. Hallway test
 
-- [ ] 5.1 Hallway test (kaizen hallway-test) of the card and the README section, covering the scenarios of `specs/solar-headroom/spec.md` (E23, E24, E25).
+- [ ] 5.1 Hallway test (kaizen hallway-test) of the card and the README section, covering the scenarios of `specs/solar-headroom/spec.md` (E23, E24, E25). Deferred by the principal (2026-11-28) until the project goes beyond a one-off research deployment; the principal found the card readable. The change may be archived with this task open.
 
 ## Workflow follow-up
 
